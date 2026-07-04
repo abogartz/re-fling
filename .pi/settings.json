@@ -1,0 +1,10 @@
+{
+  "defaultProvider": "OMLX",
+  "defaultModel": "georgeis55/Ornith-1.0-35B-MLX-oQ8",
+  "apiKey": "bogshap",
+  "defaultThinkingLevel": "xhigh",
+  "hideThinkingBlocks": false,
+  "defaultProjectTrust": "always",
+  "enable-thinking": true,
+  "reasoning": true
+}
