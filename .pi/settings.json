@@ -1,7 +1,7 @@
 {
   "defaultProvider": "OMLX",
-  "defaultModel": "georgeis55/Ornith-1.0-35B-MLX-oQ8",
-  "apiKey": "bogshap",
+  "defaultModel": "deepreinforce-ai/Ornith-1.0-35B-GGUF",
+  "apiKey": "any",
   "defaultThinkingLevel": "xhigh",
   "hideThinkingBlocks": false,
   "defaultProjectTrust": "always",

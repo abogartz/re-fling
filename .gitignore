@@ -1,5 +1,13 @@
 node_modules/
 build/
 dist/
+.pi
+.ralph
+.venv
 artifacts/
 *.tsbuildinfo
+model-serve.sh
+test-results
+playwright-report
+specs
+Modelfile

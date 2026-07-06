@@ -16,6 +16,10 @@ export default {
 		watchIgnore: ["dist/**"],
 		mac: {
 			bundleCEF: false,
+			chromiumFlags: {
+				// Enable remote debugging for Playwright testing
+				"remote-debugging-port": "9333",
+			},
 		},
 		linux: {
 			bundleCEF: false,
