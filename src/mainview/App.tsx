@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from "react";
-import { parseCSV, ParsedCSV, CSVRow } from "../csv/parser";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { parseCSV, ParsedCSV, CSVRow, ColumnMapping } from "../csv/parser";
 import {
   ReplayEngine,
   ReplayConfig,
@@ -79,7 +79,13 @@ function calculateExpectedTimeseries(
 }
 
 function App() {
+  const [rawText, setRawText] = useState<string | null>(null);
+  const [rawParsed, setRawParsed] = useState<ParsedCSV | null>(null);
   const [parsedData, setParsedData] = useState<ParsedCSV | null>(null);
+  const [columnMapping, setColumnMapping] = useState<{
+    url?: string;
+    datetime?: string;
+  }>({});
   const [speed, setSpeed] = useState(1.0);
   const [durationEnabled, setDurationEnabled] = useState(false);
   const [durationValue, setDurationValue] = useState(100);
@@ -113,31 +119,54 @@ function App() {
     setError(null);
     try {
       const text = await file.text();
-      const result = parseCSV(text);
-      if (result.errors.length > 0) {
-        setError(
-          `CSV parse errors: ${result.errors.map((e) => e.message).join(", ")}`,
-        );
+      setRawText(text);
+
+      // Parse without mapping to get column list
+      const rawResult = parseCSV(text);
+      setRawParsed(rawResult);
+
+      // Auto-select columns if names match expected fields
+      const urlCol = rawResult.columns.find((c) => c.toLowerCase() === "url");
+      const dtCol = rawResult.columns.find(
+        (c) => c.toLowerCase() === "datetime",
+      );
+      const mapping: { url?: string; datetime?: string } = {};
+      if (urlCol) mapping.url = urlCol;
+      if (dtCol) mapping.datetime = dtCol;
+      setColumnMapping(mapping);
+
+      // If both auto-selected, parse with mapping immediately
+      if (mapping.url && mapping.datetime) {
+        const mappedResult = parseCSV(text, {
+          url: mapping.url,
+          datetime: mapping.datetime,
+        });
+        if (mappedResult.errors.length > 0) {
+          setError(
+            `CSV parse errors: ${mappedResult.errors
+              .map((e) => e.message)
+              .join(", ")}`,
+          );
+        }
+        setParsedData(mappedResult);
+
+        // Set up replay state with mapped data
+        const csvDuration = calculateActualDuration(mappedResult.data);
+        setReplayState((prev) => ({
+          ...prev,
+          status: "idle",
+          filteredData: mappedResult.data.map((d) => ({
+            datetime: d.datetime,
+            url: d.url,
+          })),
+          totalRequests: mappedResult.data.length,
+          actualDurationMs: csvDuration,
+          timeseries: calculateExpectedTimeseries(mappedResult.data, csvDuration, 1),
+        }));
+        setDurationValue(Math.max(1, Math.ceil(csvDuration / 1000)));
+      } else {
+        setParsedData(null);
       }
-      setParsedData(result);
-      
-      // Calculate CSV duration and set as default
-      const csvDuration = calculateActualDuration(result.data);
-      
-      setReplayState((prev) => ({
-        ...prev,
-        status: "idle",
-        filteredData: result.data.map((d) => ({
-          datetime: d.datetime,
-          url: d.url,
-        })),
-        totalRequests: result.data.length,
-        actualDurationMs: csvDuration,
-        timeseries: calculateExpectedTimeseries(result.data, csvDuration, 1),
-      }));
-      
-      // Set duration input to CSV span (in seconds)
-      setDurationValue(Math.max(1, Math.ceil(csvDuration / 1000)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -176,6 +205,36 @@ function App() {
 
     engine.start();
   }, [parsedData, speed, baseUrl, filterPatterns, durationEnabled, durationValue, durationUnit]);
+
+  // Re-parse with column mapping when mapping changes
+  useEffect(() => {
+    if (!rawText || !columnMapping.url || !columnMapping.datetime) {
+      setParsedData(null);
+      return;
+    }
+    const map: ColumnMapping = {
+      url: columnMapping.url,
+      datetime: columnMapping.datetime,
+    };
+    try {
+      const result = parseCSV(rawText, map);
+      if (result.errors.length > 0) {
+        setError(
+          `CSV parse errors: ${result.errors
+            .map((e) => e.message)
+            .join(", ")}`,
+        );
+      }
+      setParsedData(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [rawText, columnMapping]);
+
+  // Recalculate timeseries when mapped data changes (e.g. mapping update)
+  useEffect(() => {
+    recalcTimeseries();
+  }, [parsedData]);
 
   // Effective duration in ms from UI controls
   const getEffectiveDurationMs = useCallback((): number => {
@@ -248,7 +307,12 @@ function App() {
             />
             <button
               onClick={startReplay}
-              disabled={replayState.status === "running"}
+              disabled={
+                replayState.status === "running" ||
+                !parsedData ||
+                !columnMapping.url ||
+                !columnMapping.datetime
+              }
               className="bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700 disabled:bg-gray-400 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400 whitespace-nowrap"
             >
               Start
@@ -387,6 +451,57 @@ function App() {
               />
             </div>
           </div>
+
+        {/* Column Mapping - shown after file load */}
+        {rawParsed && (
+          <div className="bg-[#252525] rounded-lg border border-gray-700 p-2 mt-2" data-testid="column-mapping">
+            <h2 className="text-xs font-semibold mb-1 text-white">Column Mapping</h2>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] font-medium text-gray-300 w-16">url</label>
+                <select
+                  value={columnMapping.url || ""}
+                  onChange={(e) =>
+                    setColumnMapping((prev) => ({ ...prev, url: e.target.value }))
+                  }
+                  className="flex-1 border border-gray-600 bg-[#1a1a1a] text-white rounded px-1 py-0.5 text-xs"
+                >
+                  <option value="">-- select column --</option>
+                  {rawParsed.columns.map((col) => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] font-medium text-gray-300 w-16">datetime</label>
+                <select
+                  value={columnMapping.datetime || ""}
+                  onChange={(e) =>
+                    setColumnMapping((prev) => ({
+                      ...prev,
+                      datetime: e.target.value,
+                    }))
+                  }
+                  className="flex-1 border border-gray-600 bg-[#1a1a1a] text-white rounded px-1 py-0.5 text-xs"
+                >
+                  <option value="">-- select column --</option>
+                  {rawParsed.columns.map((col) => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {!parsedData && (
+              <p className="mt-1 text-yellow-400 text-[10px]">
+                Select both columns above to enable Start.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -272,8 +272,9 @@ test.describe("ReFling E2E Tests", () => {
     const durationNumberInput = page.locator('input[type="number"]').first();
     await durationNumberInput.fill("1");
 
-    // Ensure unit is "seconds" (default)
-    const unitSelect = page.locator('select');
+    // Ensure unit is "seconds" (default) — scope to Replay Configuration section
+    const configSection = page.locator('h2:has-text("Replay Configuration")').locator('..');
+    const unitSelect = configSection.locator('select');
     const unitValue = await unitSelect.inputValue();
     if (unitValue !== "seconds") {
       await unitSelect.selectOption("seconds");
@@ -290,6 +291,100 @@ test.describe("ReFling E2E Tests", () => {
     }, { timeout: 5000 });
 
     // Verify final state via engine ref
+    const finalStatus = await page.evaluate(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState()?.status;
+    });
+    expect(finalStatus).toBe("completed");
+  });
+
+  test("should auto-map standard CSV columns (url, datetime) and enable Start", async ({
+    page,
+  }) => {
+    // test_requests.csv has columns: datetime, url — should auto-map
+    const filePath = "examples/test_requests.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Column mapping section should be visible
+    await expect(page.locator('[data-testid="column-mapping"]')).toBeVisible();
+
+    // Start button should be enabled (auto-mapped)
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await expect(startBtn).toBeEnabled();
+  });
+
+  test("should disable Start and show message when columns not mapped", async ({
+    page,
+  }) => {
+    // test_mapped.csv has columns: timestamp, request_path — needs manual mapping
+    const filePath = "examples/test_mapped.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Column mapping section should be visible
+    await expect(page.locator('[data-testid="column-mapping"]')).toBeVisible();
+
+    // Start button should be disabled
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await expect(startBtn).toBeDisabled();
+
+    // Help message should be visible
+    await expect(
+      page.locator('[data-testid="column-mapping"] p:text("Select both columns above to enable Start.")'),
+    ).toBeVisible();
+  });
+
+  test("should remap non-standard CSV columns and enable Start", async ({
+    page,
+  }) => {
+    // test_mapped.csv has: timestamp, request_path
+    const filePath = "examples/test_mapped.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Verify Start is disabled initially
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await expect(startBtn).toBeDisabled();
+
+    // Select "timestamp" for datetime column mapping (second select in mapping section)
+    const datetimeSelect = page
+      .locator('[data-testid="column-mapping"]')
+      .locator('select').nth(1);
+    await datetimeSelect.selectOption("timestamp");
+
+    // Select "request_path" for url column mapping (first select in mapping section)
+    const urlSelect = page
+      .locator('[data-testid="column-mapping"]')
+      .locator('select').nth(0);
+    await urlSelect.selectOption("request_path");
+
+    // Start button should now be enabled
+    await expect(startBtn).toBeEnabled();
+
+    // Help message should be gone
+    await expect(
+      page.locator('[data-testid="column-mapping"] p:text("Select both columns above to enable Start.")'),
+    ).not.toBeVisible();
+
+    // Enable duration override to 1 second so replay finishes fast
+    const checkbox = page.locator('input[type="checkbox"]');
+    await checkbox.check();
+    const durationNumberInput = page.locator('input[type="number"]').first();
+    await durationNumberInput.fill("1");
+
+    // Click Start and verify replay begins
+    await startBtn.click();
+    await expect(
+      page.locator('[data-testid="replay-status"]'),
+    ).toBeVisible({ timeout: 5000 });
+
+    // Wait for completion
+    await page.waitForFunction(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState()?.status === "completed";
+    }, { timeout: 10000 });
+
     const finalStatus = await page.evaluate(() => {
       const engine = (window as any).__engineRef;
       return engine?.getState()?.status;
