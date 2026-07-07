@@ -52,6 +52,40 @@ When you run `bun run dev` (without HMR):
 └── package.json
 ```
 
+## Development Workflow
+
+```bash
+# Run all validation (ESLint + unit tests + E2E tests)
+bun run validate
+```
+
+This runs:
+1. **ESLint** - Lints TypeScript/React code with strict rules
+2. **Unit tests** - Bun test suite for CSV parser and replay engine
+3. **E2E tests** - Playwright tests for full app behavior
+
+**Important**: All checks must pass before committing changes. The pi agent requires `bun run validate` to pass after every code modification.
+
+### Validation Rules
+- ESLint: 0 errors (warnings allowed)
+- Unit tests: All tests must pass
+- E2E tests: All tests must pass
+
+If validation fails, fix the issues before proceeding.
+
+## Testing & Validation
+
+```bash
+# Run only unit tests
+bun run test
+
+# Run only E2E tests (requires dev server)
+bun run test:e2e
+
+# Run only linting
+bun run lint
+```
+
 ## Customizing
 
 - **React components**: Edit files in `src/mainview/`

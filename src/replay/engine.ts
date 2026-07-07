@@ -1,11 +1,10 @@
-import { ParsedCSV, CSVRow } from "../csv/parser";
+import { CSVRow } from "../csv/parser";
 
 // --- Types ---
 
 export interface ReplayConfig {
   speed: number;
-  iterations: number;
-  duration: number;
+  duration: number | null;
   baseUrl: string;
   filterPatterns: string[];
 }
@@ -17,7 +16,7 @@ export interface TimeseriesData {
 
 export interface ReplayState {
   status: "idle" | "running" | "paused" | "completed" | "cancelled" | "error";
-  config: ReplayConfig;
+  config?: ReplayConfig;
   timings: number[];
   filteredData: CSVRow[];
   progress: number;
@@ -44,9 +43,8 @@ export class ReplayEngine {
   private startTime: number = 0;
   private pausedAt: number = 0;
   private filteredRows: CSVRow[] = [];
-  private currentIteration: number = 0;
   private currentRow: number = 0;
-  private clampedDelay: number = 1; // ms, clamped between 1ms and 10s
+  private timings: number[] = [];
   private actualDurationMs: number = 0; // Time span of the CSV data in ms
 
   constructor() {
@@ -56,7 +54,7 @@ export class ReplayEngine {
   private getInitialState(): ReplayState {
     return {
       status: "idle",
-      config: { speed: 1, iterations: 1, duration: 0, baseUrl: "", filterPatterns: [] },
+      config: { speed: 1,  duration: 0, baseUrl: "", filterPatterns: [] },
       timings: [],
       filteredData: [],
       progress: 0,
@@ -80,17 +78,19 @@ export class ReplayEngine {
     };
     
     this.config = effectiveConfig;
-    this.filteredRows = this.filterRows(data);
-    this.clampedDelay = this.calculateTimings(effectiveConfig)[0] || 1;
+    const rawFiltered = this.filterRows(data);
+    // Resolve base URL on the working rows so tick() fetches absolute URLs
+    this.filteredRows = rawFiltered.map(row => ({
+      ...row,
+      url: this.resolveBaseUrl(row),
+    }));
+    this.timings = this.calculateTimings(effectiveConfig);
     this.state = {
       ...this.getInitialState(),
       config: effectiveConfig,
       timings: this.calculateTimings(effectiveConfig),
-      filteredData: this.filteredRows.map(row => ({
-        ...row,
-        url: this.resolveBaseUrl(row),
-      })),
-      totalRequests: this.filteredRows.length * this.config.iterations,
+      filteredData: [...this.filteredRows],
+      totalRequests: this.filteredRows.length,
       timeseries: this.buildTimeseries(),
       actualDurationMs: this.actualDurationMs,
     };
@@ -98,18 +98,37 @@ export class ReplayEngine {
   }
 
   private calculateActualDuration(data: CSVRow[]): number {
-    if (data.length < 2) return 0;
+    if (data.length < 2) {return 0;}
     const firstTime = new Date(data[0].datetime).getTime();
     const lastTime = new Date(data[data.length - 1].datetime).getTime();
     return Math.max(0, lastTime - firstTime);
   }
 
   private calculateTimings(config: ReplayConfig): number[] {
-    const delayMs = config.duration / config.speed;
     const minDelay = 1; // ms
-    const maxDelay = 10_000; // ms — TODO: revisit as a safety cap for timeouts later
-    const clampedDelay = Math.max(minDelay, Math.min(maxDelay, delayMs));
-    return Array.from({ length: this.filteredRows.length }, () => clampedDelay);
+    const maxDelay = 10_000; // ms
+
+    if (this.filteredRows.length < 2) {
+      // Single row or empty — use a small default delay
+      return Array.from({ length: this.filteredRows.length }, () => minDelay);
+    }
+
+    const delays: number[] = [];
+    for (let i = 0; i < this.filteredRows.length; i++) {
+      if (i === 0) {
+        // First row has no preceding gap — use min delay
+        delays.push(minDelay);
+      } else {
+        const prevTime = new Date(this.filteredRows[i - 1].datetime).getTime();
+        const currTime = new Date(this.filteredRows[i].datetime).getTime();
+        const rawGap = currTime - prevTime;
+        // Scale gap by speed (higher speed = smaller gaps)
+        const scaledGap = rawGap / config.speed;
+        delays.push(Math.max(minDelay, Math.min(maxDelay, scaledGap)));
+      }
+    }
+
+    return delays;
   }
 
   private filterRows(rows: CSVRow[]): CSVRow[] {
@@ -118,6 +137,7 @@ export class ReplayEngine {
     }
 
     return rows.filter((row) =>
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       !this.config!.filterPatterns.some((pattern) => {
         try {
           return new RegExp(pattern, "i").test(row.url);
@@ -151,12 +171,15 @@ export class ReplayEngine {
     // Calculate the actual duration from CSV timestamps
     const csvDuration = this.calculateActualDuration(this.csvData);
     
+    // Calculate effective playback duration (accounts for speed)
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const effectiveDurationMs = this.config!.duration / this.config!.speed;
+    
     // Determine time bins (1 second intervals)
     const binSizeMs = 1000; // 1 second bins
-    const totalBins = Math.ceil(this.config.duration / binSizeMs);
+    const totalBins = Math.ceil(effectiveDurationMs / binSizeMs);
     
-    // Calculate RPS for each bin based on original CSV timestamps
-    // Scale by iterations to show expected load
+    // Calculate RPS for each bin
     const rpsValues: number[] = [];
     const timestamps: number[] = [];
     
@@ -165,22 +188,21 @@ export class ReplayEngine {
       const binEnd = (i + 1) * binSizeMs;
       
       // Count requests that would fall in this time bin during playback
-      // Map CSV timestamps to playback time using speed factor
       let countInBin = 0;
       for (const row of this.filteredRows) {
         const csvTime = new Date(row.datetime).getTime();
         // Normalize CSV time to 0-1 range based on actual CSV duration
         const normalizedTime = csvDuration > 0 ? (csvTime - new Date(this.csvData[0].datetime).getTime()) / csvDuration : 0;
-        // Map to playback time
-        const playbackTime = normalizedTime * this.config!.duration;
+        // Map to playback time using effective duration
+        const playbackTime = normalizedTime * effectiveDurationMs;
         
         if (playbackTime >= binStart && playbackTime < binEnd) {
           countInBin++;
         }
       }
       
-      // Multiply by iterations for expected load
-      const rps = Math.round(countInBin * (this.config?.iterations || 1));
+      // Scale RPS by speed (more requests per second at higher speeds)
+      const rps = Math.round(countInBin * this.config!.speed);
       rpsValues.push(rps);
       timestamps.push(binStart);
     }
@@ -259,7 +281,6 @@ export class ReplayEngine {
       this.currentRow++;
       if (this.currentRow >= this.filteredRows.length) {
         this.currentRow = 0;
-        this.currentIteration++;
       }
     }
 
@@ -267,7 +288,7 @@ export class ReplayEngine {
     const progress = Math.min(1, elapsed / this.config.duration);
     
     // Total requests completed so far (for display purposes)
-    const completed = this.currentIteration * this.filteredRows.length + this.currentRow;
+    const completed = this.currentRow;
 
     this.state = {
       ...this.state,
@@ -279,8 +300,9 @@ export class ReplayEngine {
     };
     this.emit();
 
-    // Use clamped delay to prevent infinite loops when duration=0
-    this.timerId = setTimeout(() => this.tick(), this.clampedDelay);
+    // Use per-row delay from timings array
+    const rowDelay = this.timings[this.currentRow] ?? 1;
+    this.timerId = setTimeout(() => this.tick(), rowDelay);
   }
 
   private clearTimer(): void {

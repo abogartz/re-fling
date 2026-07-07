@@ -8,7 +8,7 @@ import {
 import { TimeseriesChart } from "./TimeseriesChart";
 
 function calculateActualDuration(data: CSVRow[]): number {
-  if (data.length < 2) return 0;
+  if (data.length < 2) {return 0;}
   const firstTime = new Date(data[0].datetime).getTime();
   const lastTime = new Date(data[data.length - 1].datetime).getTime();
   return Math.max(0, lastTime - firstTime);
@@ -32,7 +32,6 @@ function calculateExpectedTimeseries(
   data: CSVRow[],
   durationMs: number,
   speed: number,
-  iterations: number
 ): { timestamps: number[]; rpsValues: number[] } {
   if (data.length === 0 || durationMs === 0) {
     return { timestamps: [], rpsValues: [] };
@@ -41,9 +40,12 @@ function calculateExpectedTimeseries(
   // Calculate actual CSV duration
   const csvDuration = calculateActualDuration(data);
   
+  // Calculate effective playback duration (accounts for speed)
+  const effectiveDurationMs = durationMs / speed;
+  
   // Use 1-second bins for accurate RPS calculation
   const binSizeMs = 1000; // 1 second
-  const totalBins = Math.ceil(durationMs / binSizeMs);
+  const totalBins = Math.ceil(effectiveDurationMs / binSizeMs);
   
   // Calculate RPS for each bin
   const rpsValues: number[] = [];
@@ -59,17 +61,16 @@ function calculateExpectedTimeseries(
     let countInBin = 0;
     for (const row of data) {
       const csvTime = new Date(row.datetime).getTime();
-      // Map CSV time directly to playback time
-      const playbackTime = csvDuration > 0 ? (csvTime - firstTime) * durationMs / csvDuration : 0;
+      // Map CSV time to playback time using effective duration
+      const playbackTime = csvDuration > 0 ? (csvTime - firstTime) * effectiveDurationMs / csvDuration : 0;
       
       if (playbackTime >= binStart && playbackTime < binEnd) {
         countInBin++;
       }
     }
     
-    // Calculate RPS: requests per second in this bin, scaled by speed and iterations
-    const binDurationSec = binSizeMs / 1000;
-    const rps = (countInBin * iterations * speed) / binDurationSec;
+    // Calculate RPS: requests per second in this bin, scaled by speed
+    const rps = Math.round(countInBin * speed);
     rpsValues.push(rps);
     timestamps.push(binStart);
   }
@@ -80,8 +81,9 @@ function calculateExpectedTimeseries(
 function App() {
   const [parsedData, setParsedData] = useState<ParsedCSV | null>(null);
   const [speed, setSpeed] = useState(1.0);
-  const [duration, setDuration] = useState(100);
-  const [iterations, setIterations] = useState(1);
+  const [durationEnabled, setDurationEnabled] = useState(false);
+  const [durationValue, setDurationValue] = useState(100);
+  const [durationUnit, setDurationUnit] = useState<"seconds" | "minutes" | "hours">("seconds");
   const [baseUrl, setBaseUrl] = useState("");
   const [filterPatterns, setFilterPatterns] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -94,7 +96,6 @@ function App() {
     elapsed: 0,
     config: {
       speed: 1.0,
-      iterations: 1,
       duration: 0,
       baseUrl: "",
       filterPatterns: [],
@@ -108,7 +109,7 @@ function App() {
 
   const handleFileLoad = useCallback(async () => {
     const file = fileInputRef.current?.files?.[0];
-    if (!file) return;
+    if (!file) {return;}
     setError(null);
     try {
       const text = await file.text();
@@ -132,25 +133,27 @@ function App() {
         })),
         totalRequests: result.data.length,
         actualDurationMs: csvDuration,
-        timeseries: calculateExpectedTimeseries(result.data, csvDuration, 1, 1),
+        timeseries: calculateExpectedTimeseries(result.data, csvDuration, 1),
       }));
       
-      // Set duration to CSV span
-      setDuration(csvDuration);
+      // Set duration input to CSV span (in seconds)
+      setDurationValue(Math.max(1, Math.ceil(csvDuration / 1000)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
 
   const startReplay = useCallback(() => {
-    if (!parsedData) return;
+    if (!parsedData) {return;}
     const engine = new ReplayEngine();
     engineRef.current = engine;
+    // Expose engine for E2E testing
+    (window as any).__engineRef = engine;
 
+    const effectiveDurationMs = getEffectiveDurationMs();
     const config: ReplayConfig = {
       speed,
-      iterations,
-      duration: duration > 0 ? duration : calculateActualDuration(parsedData.data),
+      duration: effectiveDurationMs > 0 ? effectiveDurationMs : calculateActualDuration(parsedData.data),
       baseUrl,
       filterPatterns: filterPatterns
         .split(",")
@@ -172,54 +175,43 @@ function App() {
     );
 
     engine.start();
-  }, [parsedData, speed, iterations, baseUrl, filterPatterns]);
+  }, [parsedData, speed, baseUrl, filterPatterns, durationEnabled, durationValue, durationUnit]);
 
-  const pauseReplay = useCallback(() => {
-    engineRef.current?.pause();
-  }, []);
-
-  const resumeReplay = useCallback(() => {
-    engineRef.current?.resume();
-  }, []);
+  // Effective duration in ms from UI controls
+  const getEffectiveDurationMs = useCallback((): number => {
+    if (!durationEnabled || durationValue <= 0) { return 0; }
+    const multipliers: Record<string, number> = { seconds: 1000, minutes: 60_000, hours: 3_600_000 };
+    return durationValue * (multipliers[durationUnit] ?? 1000);
+  }, [durationEnabled, durationValue, durationUnit]);
 
   // Recalculate timeseries when controls change
+  const recalcTimeseries = useCallback(() => {
+    if (!parsedData) { return; }
+    const csvDuration = calculateActualDuration(parsedData.data);
+    const overrideMs = getEffectiveDurationMs();
+    const effectiveDuration = overrideMs > 0 ? overrideMs : csvDuration;
+    setReplayState(prev => ({
+      ...prev,
+      timeseries: calculateExpectedTimeseries(parsedData.data, effectiveDuration, speed),
+    }));
+  }, [parsedData, speed, getEffectiveDurationMs]);
+
   const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newSpeed = parseFloat(e.target.value) || 1;
     setSpeed(newSpeed);
-    if (parsedData) {
-      const csvDuration = calculateActualDuration(parsedData.data);
-      const effectiveDuration = duration > 0 ? duration : csvDuration;
-      setReplayState(prev => ({
-        ...prev,
-        timeseries: calculateExpectedTimeseries(parsedData.data, effectiveDuration, newSpeed, iterations),
-      }));
-    }
+    recalcTimeseries();
   };
 
-  const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newDuration = parseInt(e.target.value) || 0;
-    setDuration(newDuration);
-    if (parsedData) {
-      const csvDuration = calculateActualDuration(parsedData.data);
-      const effectiveDuration = newDuration > 0 ? newDuration : csvDuration;
-      setReplayState(prev => ({
-        ...prev,
-        timeseries: calculateExpectedTimeseries(parsedData.data, effectiveDuration, speed, iterations),
-      }));
-    }
+  const handleDurationValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value, 10);
+    if (isNaN(val) || val < 0) { return; }
+    setDurationValue(val);
+    recalcTimeseries();
   };
 
-  const handleIterationsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newIterations = parseInt(e.target.value) || 1;
-    setIterations(newIterations);
-    if (parsedData) {
-      const csvDuration = calculateActualDuration(parsedData.data);
-      const effectiveDuration = duration > 0 ? duration : csvDuration;
-      setReplayState(prev => ({
-        ...prev,
-        timeseries: calculateExpectedTimeseries(parsedData.data, effectiveDuration, speed, newIterations),
-      }));
-    }
+  const handleDurationUnitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setDurationUnit(e.target.value as "seconds" | "minutes" | "hours");
+    recalcTimeseries();
   };
 
   const stopReplay = useCallback(() => {
@@ -257,14 +249,14 @@ function App() {
             <button
               onClick={startReplay}
               disabled={replayState.status === "running"}
-              className="bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+              className="bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700 disabled:bg-gray-400 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400 whitespace-nowrap"
             >
               Start
             </button>
             <button
               onClick={stopReplay}
-              disabled={replayState.status === "idle" || replayState.status === "completed"}
-              className="bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700 disabled:opacity-50 whitespace-nowrap"
+              disabled={replayState.status === "idle" || replayState.status === "completed" || replayState.status === "cancelled"}
+              className="bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700 disabled:bg-gray-400 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400 whitespace-nowrap"
             >
               Stop
             </button>
@@ -276,6 +268,24 @@ function App() {
             <p className="mt-1 text-green-400 text-xs">
               Loaded {parsedData.data.length} rows, {parsedData.columns.length} columns
             </p>
+          )}
+          {/* Progress - inline with controls */}
+          {(replayState.status !== "idle" || replayState.completedRequests > 0) && (
+            <div className="flex items-center gap-1.5 mt-1.5">
+              <div className="text-[10px] font-medium text-white" data-testid="replay-status">Status:</div>
+              <p className={`text-[10px] font-medium flex-1 ${statusColor[replayState.status]}`}>
+                {replayState.status}
+              </p>
+              <div className="w-24 bg-gray-700 rounded-full h-1.5">
+                <div
+                  className="bg-blue-600 h-1.5 rounded-full transition-all"
+                  style={{ width: `${replayState.progress * 100}%` }}
+                />
+              </div>
+              <p className="text-[10px] text-gray-400">
+                {replayState.completedRequests}/{replayState.totalRequests}
+              </p>
+            </div>
           )}
         </div>
 
@@ -298,30 +308,40 @@ function App() {
                 />
               </div>
               <div className="flex-1">
-                <label className="block text-[10px] font-medium text-gray-300 mb-0.5">
-                  Duration (ms)
+                <label className="flex items-center gap-1 text-[10px] font-medium text-gray-300 mb-0.5">
+                  <input
+                    type="checkbox"
+                    checked={durationEnabled}
+                    onChange={(e) => {
+                      setDurationEnabled(e.target.checked);
+                      recalcTimeseries();
+                    }}
+                    className="accent-blue-500 w-3 h-3"
+                  />
+                  Override Duration
                 </label>
-                <input
-                  type="number"
-                  min="1"
-                  max={replayState.actualDurationMs * 2 || 10000}
-                  value={duration}
-                  onChange={handleDurationChange}
-                  className="w-full border border-gray-600 bg-[#1a1a1a] text-white rounded px-1.5 py-0.5 text-xs"
-                />
+                <div className="flex gap-1">
+                  <input
+                    type="number"
+                    min="1"
+                    disabled={!durationEnabled}
+                    value={durationValue}
+                    onChange={handleDurationValueChange}
+                    className="w-20 border border-gray-600 bg-[#1a1a1a] text-white rounded px-1.5 py-0.5 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                  />
+                  <select
+                    value={durationUnit}
+                    onChange={handleDurationUnitChange}
+                    disabled={!durationEnabled}
+                    className="flex-1 border border-gray-600 bg-[#1a1a1a] text-white rounded px-1 py-0.5 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <option value="seconds">seconds</option>
+                    <option value="minutes">minutes</option>
+                    <option value="hours">hours</option>
+                  </select>
+                </div>
               </div>
-              <div className="flex-1">
-                <label className="block text-[10px] font-medium text-gray-300 mb-0.5">
-                  Iterations
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={iterations}
-                  onChange={handleIterationsChange}
-                  className="w-full border border-gray-600 bg-[#1a1a1a] text-white rounded px-1.5 py-0.5 text-xs"
-                />
-              </div>
+
             </div>
             {replayState.actualDurationMs > 0 && (
               <p className="text-[10px] text-gray-400 mt-0.5">
@@ -334,7 +354,7 @@ function App() {
         <div className="bg-[#252525] rounded-lg border border-gray-700 p-2 mb-2">
             <h2 className="text-xs font-semibold mb-0.5 text-white">Expected RPS</h2>
             {replayState.timeseries.rpsValues.length > 0 ? (
-              <div className="h-24">
+              <div className="h-24" style={{marginBottom: "50px"}}>
                 <TimeseriesChart
                   timestamps={replayState.timeseries.timestamps}
                   rpsValues={replayState.timeseries.rpsValues}
@@ -350,7 +370,7 @@ function App() {
         {/* Filters - compact */}
         <div className="bg-[#252525] rounded-lg border border-gray-700 p-2">
             <h2 className="text-xs font-semibold mb-1 text-white">Filters</h2>
-            <div className="flex gap-1.5 mb-1.5">
+            <div className="flex gap-1.5">
               <input
                 type="text"
                 value={baseUrl}
@@ -366,25 +386,6 @@ function App() {
                 className="flex-1 border border-gray-600 bg-[#1a1a1a] text-white rounded px-1.5 py-0.5 text-xs"
               />
             </div>
-
-            {/* Progress - inline */}
-            {(replayState.status !== "idle" || replayState.completedRequests > 0) && (
-              <div className="flex items-center gap-1.5">
-                <div className="text-[10px] font-medium text-white" data-testid="replay-status">Status:</div>
-                <p className={`text-[10px] font-medium flex-1 ${statusColor[replayState.status]}`}>
-                  {replayState.status}
-                </p>
-                <div className="w-24 bg-gray-700 rounded-full h-1.5">
-                  <div
-                    className="bg-blue-600 h-1.5 rounded-full transition-all"
-                    style={{ width: `${replayState.progress * 100}%` }}
-                  />
-                </div>
-                <p className="text-[10px] text-gray-400">
-                  {replayState.completedRequests}/{replayState.totalRequests}
-                </p>
-              </div>
-            )}
           </div>
       </div>
     </div>

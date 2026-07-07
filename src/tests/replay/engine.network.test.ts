@@ -24,7 +24,9 @@ beforeAll(async () => {
     fetch(req: Request) {
       const url = new URL(req.url);
       const entry = mockResponse[url.pathname];
-      if (!entry) return new Response("Not Found", { status: 404 });
+      if (!entry) {
+        return new Response("Not Found", { status: 404 });
+      }
       const [status, body] = entry;
       return new Response(body, {
         status,
@@ -36,7 +38,9 @@ beforeAll(async () => {
 });
 
 function mockUrl(path: string): string {
-  if (!mockServer) return "";
+  if (!mockServer) {
+    return "";
+  }
   return `http://localhost:${mockServer.port}${path}`;
 }
 
@@ -64,18 +68,16 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
   test("#1 completedRequests advances when URLs are reachable — GREEN target", async () => {
     const data = sampleData(["/api/users", "/api/posts"]);
     const config: ReplayConfig = {
-      speed: 3, iterations: 1, duration: 50, // ~17ms per tick
+      speed: 10.0,
+      duration: 50,
       baseUrl: "", filterPatterns: [],
     };
 
     engine.setData(data, config);
-    let lastCompleted = 0;
-    engine.setProgressCallback((s) => {
-      lastCompleted = s.completedRequests;
-    });
+    engine.setProgressCallback(() => {});
     engine.start();
 
-    // Wait enough iterations worth of ticks ~80ms each for multiple progress updates
+    // Wait enough ticks for multiple progress updates
     await new Promise((r) => setTimeout(r, 350));
 
     const state = engine.getState();
@@ -89,7 +91,8 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
   test("#2 engine counts per-request network errors as HTTP failures — GREEN target", async () => {
     const data = sampleData(["http://localhost:59999/dead-port"]); // unreachable — fetch rejects
     const config: ReplayConfig = {
-      speed: 3, iterations: 1, duration: 50, // ~17ms tick
+      speed: 10.0,
+      duration: 50,
       baseUrl: "", filterPatterns: [],
     };
 
@@ -105,47 +108,40 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
   });
 
   test("#3 engine tracks elapsed time correctly during running — GREEN target", async () => {
-    // Test that the engine updates elapsed *progressively* across ticks by observing callback state.
-    const data = sampleData(["/api/users", "/api/posts"]);
+    // Use data with small gaps so elapsed progresses within wait window
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00.000Z"), url: mockUrl("/api/users") },
+      { datetime: new Date("2024-01-01T10:00:00.050Z"), url: mockUrl("/api/posts") },
+    ];
     const config: ReplayConfig = {
-      speed: 3, iterations: 1, duration: 50, // ~17ms per tick
-      baseUrl: "", filterPatterns: [],
+      speed: 10.0,
+      duration: 0,
+      baseUrl: "",
+      filterPatterns: [],
     };
 
     engine.setData(data, config);
-    let lastCompletedCallback = 0;
-    let elapsedAtLastCallback = 0;
-    engine.setProgressCallback((s) => {
-      if (s.completedRequests > lastCompletedCallback || s.completedRequests === 0) {
-        lastCompletedCallback = s.completedRequests;
-        elapsedAtLastCallback = s.elapsed;
-      }
-    });
+    engine.setProgressCallback(() => {});
     engine.start();
 
-    // Wait enough iterations worth of ticks to see elapsed progress
-    await new Promise((r) => setTimeout(r, 400)); // ~23 ticks at 17ms each
+    // Gap: 50ms / 10x = 5ms. First tick fires immediately (elapsed≈0),
+    // second tick after 1ms. Both complete well within 200ms.
+    await new Promise((r) => setTimeout(r, 200));
 
     const finalState = engine.getState();
     console.log(
-      `[GREEN] elapsed=${finalState.elapsed} | lastCallback=${elapsedAtLastCallback} | status=${finalState.status}`,
+      `[GREEN] elapsed=${finalState.elapsed} | status=${finalState.status}`,
     );
 
-    // If the engine has actually advanced more ticks, its elapsed should reflect that.
-    // Since engine runs async, by the time 400ms elapsed there should be at least a few updates.
-    if (finalState.elapsed === 0) {
-      console.warn(`⚠️ Engine is NOT advancing elapsed. Expected > 0 but got ${finalState.elapsed}`);
-    }
-
-    // Verify engine tick loop ran at least once meaningfully: completedRequests should be >0 OR status=completed
-    expect(finalState.completedRequests).toBeGreaterThan(0);
+    // Engine should have elapsed time > 0 and be in running or completed state
+    expect(finalState.elapsed).toBeGreaterThan(0);
+    expect(["running", "completed"]).toContain(finalState.status);
   });
 
   test("#4 engine does not halt on network error — keeps status as running (GREEN target)", async () => {
     const badData = [{ datetime: new Date(), url: "http://192.0.2.1/timeout-test" }];
     // RFC5737 TEST-NET-1; requests will fail. Engine must keep running per agreement.
     const config: ReplayConfig = {
-      speed: 3, iterations: 3, duration: 50, // ~17ms tick, multiple cycles
       baseUrl: "", filterPatterns: [],
     };
 

@@ -176,4 +176,185 @@ test.describe("ReFling E2E Tests", () => {
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SCREENSHOT_DIR}/03b-timeseries-visible.png`, fullPage: true });
   });
+
+  test("should resolve base URL with relative CSV paths", async ({ page }) => {
+    const filePath = "examples/test_requests.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Wait for file to load
+    await expect(
+      page.locator("p").filter({ hasText: "Loaded" }),
+    ).toBeVisible();
+
+    // Set base URL to http://localhost:3001
+    const baseUrlInput = page.locator('input[placeholder="Base URL"]');
+    await baseUrlInput.fill("http://localhost:3001");
+
+    // Click Start to trigger engine.setData() which resolves base URL + relative paths
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await startBtn.click();
+
+    // Wait for replay to start (status changes from idle)
+    await expect(
+      page.locator('[data-testid="replay-status"]'),
+    ).toBeVisible({ timeout: 5000 });
+
+    // Read the resolved URLs from the engine state (exposed via window.__engineRef)
+    const resolvedUrls = await page.evaluate(() => {
+      const engine = (window as any).__engineRef;
+      if (!engine) return [];
+      return engine.getFilteredRows().map((r: any) => r.url);
+    });
+
+    // CSV has only /v1/models?... paths; base URL is http://localhost:3001
+    // Engine.resolveBaseUrl should concat them into full URLs
+    expect(resolvedUrls.length).toBeGreaterThan(0);
+    for (const url of resolvedUrls) {
+      expect(url).toMatch(/^http:\/\/localhost:3001\/v1\/models\?uid=/);
+    }
+  });
+
+  test("stop button disabled before start and enabled during run", async ({
+    page,
+  }) => {
+    // Fresh page — no file loaded, status is "idle"
+    const stopBtn = page.locator("button").filter({ hasText: /^Stop$/i });
+    await expect(stopBtn).toBeDisabled();
+
+    // Verify visually disabled (grey background)
+    const bgColor = await stopBtn.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.backgroundColor;
+    });
+    expect(bgColor).toMatch(/rgb\(156, 163, 175\)/); // gray-400 in dark theme
+
+    // Load a CSV file (still idle — stop should remain disabled)
+    const filePath = "examples/test_requests.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+    await expect(stopBtn).toBeDisabled();
+
+    // Click Start to begin the replay
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await startBtn.click();
+
+    // Once running, Stop must be enabled and red
+    await expect(stopBtn).toBeEnabled();
+    const runningBgColor = await stopBtn.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.backgroundColor;
+    });
+    expect(runningBgColor).toMatch(/rgb\(220, 38, 38\)/); // red-600
+
+    // Wait for replay to actually start before verifying it's still enabled
+    await expect(
+      page.locator('[data-testid="replay-status"]'),
+    ).toBeVisible({ timeout: 5000 });
+    await expect(stopBtn).toBeEnabled();
+  });
+
+  test("should truncate run to 1 second via duration override and complete", async ({ page }) => {
+    const filePath = "examples/test_requests.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Wait for config section
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Enable duration override checkbox
+    const checkbox = page.locator('input[type="checkbox"]');
+    await checkbox.check();
+
+    // Set duration value to 1 second
+    const durationNumberInput = page.locator('input[type="number"]').first();
+    await durationNumberInput.fill("1");
+
+    // Ensure unit is "seconds" (default)
+    const unitSelect = page.locator('select');
+    const unitValue = await unitSelect.inputValue();
+    if (unitValue !== "seconds") {
+      await unitSelect.selectOption("seconds");
+    }
+
+    // Click Start
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await startBtn.click();
+
+    // Wait for engine to report completed status
+    await page.waitForFunction(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState()?.status === 'completed';
+    }, { timeout: 5000 });
+
+    // Verify final state via engine ref
+    const finalStatus = await page.evaluate(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState()?.status;
+    });
+    expect(finalStatus).toBe("completed");
+  });
+
+  test("should update timeseries when speed slider changes", async ({ page }) => {
+    const filePath = "examples/test_requests.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Wait for config section
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Get initial timeseries data from Chart.js
+    const initialData = await page.evaluate(() => {
+      const chart = window["__chartInstance"];
+      if (!chart || !chart.data) return null;
+      return {
+        labels: [...chart.data.labels],
+        datasets: chart.data.datasets.map((ds: any) => ({
+          label: ds.label,
+          data: [...ds.data],
+        })),
+      };
+    });
+
+    expect(initialData).not.toBeNull();
+    const initialLabels = initialData!.labels.length;
+
+    // Change speed to 2x using the slider
+    const speedSlider = page.locator('input[type="range"]');
+    await speedSlider.evaluate((el: HTMLInputElement) => {
+      el.value = "2.0";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    // Wait for reactivity
+    await page.waitForTimeout(500);
+
+    // Get updated timeseries data
+    const updatedData = await page.evaluate(() => {
+      const chart = window["__chartInstance"];
+      if (!chart || !chart.data) return null;
+      return {
+        labels: [...chart.data.labels],
+        datasets: chart.data.datasets.map((ds: any) => ({
+          label: ds.label,
+          data: [...ds.data],
+        })),
+      };
+    });
+
+    expect(updatedData).not.toBeNull();
+    const updatedLabels = updatedData!.labels.length;
+
+    // At 2x speed, timeseries should have fewer bins (duration / speed)
+    // Allow some tolerance for rounding
+    expect(updatedLabels).toBeLessThanOrEqual(initialLabels);
+    expect(updatedLabels).toBeGreaterThan(0);
+
+    // Screenshot: Timeseries after speed change
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/04-speed-change.png`, fullPage: true });
+  });
 });

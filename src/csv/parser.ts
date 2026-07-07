@@ -15,7 +15,10 @@ export type ColumnMapping = {
   [expected: string]: string;
 };
 
-const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1GB in bytes
+export interface CSVRow {
+  datetime: string,
+  url: string,
+}
 
 export function parseCSV(
   csv: string,

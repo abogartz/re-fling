@@ -1,3 +1,4 @@
+import { useRef, useEffect } from "react";
 import { Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -10,6 +11,7 @@ import {
   Legend,
   Filler,
 } from "chart.js";
+import { TooltipItem } from "chart.js";
 
 ChartJS.register(
   CategoryScale,
@@ -53,7 +55,7 @@ export function TimeseriesChart({ timestamps, rpsValues }: TimeseriesChartProps)
       },
       tooltip: {
         callbacks: {
-          label: (context: any) => `${context.parsed.y.toFixed(2)} RPS`,
+          label: (context: TooltipItem<"line">) => `${(context.parsed.y as number).toFixed(2)} RPS`,
         },
       },
     },
@@ -82,8 +84,8 @@ export function TimeseriesChart({ timestamps, rpsValues }: TimeseriesChartProps)
         ticks: {
           stepSize: 1,
           color: "#9ca3af",
-          callback: function(value: any) {
-            return Math.round(value);
+          callback: function(value: number | string) {
+            return Math.round(Number(value));
           },
         },
         grid: {
@@ -93,9 +95,19 @@ export function TimeseriesChart({ timestamps, rpsValues }: TimeseriesChartProps)
     },
   };
 
+  const chartRef = useRef<Chart | null>(null);
+
+  // Expose chart instance globally for E2E testing
+  useEffect(() => {
+    if (chartRef.current) {
+      const win = window as unknown as Record<string, unknown>;
+      win["__chartInstance"] = chartRef.current;
+    }
+  }, [timestamps, rpsValues]);
+
   return (
-    <div className="w-full h-48" style={{ minHeight: "200px" }}>
-      <Line data={data} options={options} />
+    <div className="w-full h-48" style={{ maxHeight: "150px" }}>
+      <Line ref={chartRef} data={data} options={options} />
     </div>
   );
 }
