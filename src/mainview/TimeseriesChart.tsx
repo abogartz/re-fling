@@ -1,3 +1,4 @@
+
 import { useRef, useEffect } from "react";
 import { Line } from "react-chartjs-2";
 import {
@@ -10,8 +11,9 @@ import {
   Tooltip,
   Legend,
   Filler,
+  type Chart,
+  type TooltipItem,
 } from "chart.js";
-import { TooltipItem } from "chart.js";
 
 ChartJS.register(
   CategoryScale,
@@ -95,7 +97,7 @@ export function TimeseriesChart({ timestamps, rpsValues }: TimeseriesChartProps)
     },
   };
 
-  const chartRef = useRef<Chart | null>(null);
+  const chartRef = useRef<Chart<"line", number[], unknown> | null>(null);
 
   // Expose chart instance globally for E2E testing
   useEffect(() => {

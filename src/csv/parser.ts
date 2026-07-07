@@ -16,8 +16,8 @@ export type ColumnMapping = {
 };
 
 export interface CSVRow {
-  datetime: string,
-  url: string,
+  datetime: Date;
+  url: string;
 }
 
 export function parseCSV(
@@ -97,7 +97,7 @@ export function parseCSV(
       const url = mappedValues["url"] || "";
 
       // Create the row object with all mapped values
-      const row: Record<string, string | Date> = {
+      const row: { datetime: Date; url: string; [key: string]: string | Date } = {
         datetime,
         url,
       };

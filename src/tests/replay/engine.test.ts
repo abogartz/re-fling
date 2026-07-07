@@ -49,11 +49,11 @@ describe("Replay Engine", () => {
     const state = engine.getState();
 
     expect(state.totalRequests).toBe(3);
-    expect(state.config!.speed).toBe(1.0);
-    expect(state.config!.baseUrl).toBe("");
-    expect(state.config!.filterPatterns).toEqual([]);
+    expect(state.config?.speed).toBe(1.0);
+    expect(state.config?.baseUrl).toBe("");
+    expect(state.config?.filterPatterns).toEqual([]);
     // Duration should be auto-set to actual CSV span when 0
-    expect(state.config!.duration).toBeGreaterThan(0);
+    expect(state.config?.duration).toBeGreaterThan(0);
   });
 
   test("should apply speed multiplier to timing", () => {
@@ -68,7 +68,7 @@ describe("Replay Engine", () => {
     const state = engine.getState();
 
     // With 2x speed, timing should be adjusted
-    expect(state.config.speed).toBe(2.0);
+    expect(state.config?.speed).toBe(2.0);
   });
 
   test("should calculate timing within bounds (1ms min, 10s max)", () => {
@@ -196,7 +196,7 @@ describe("Replay Engine", () => {
     engine.setData(sampleData, config);
     const state = engine.getState();
 
-    expect(state.config.duration).toBe(50);
+    expect(state.config?.duration).toBe(50);
     // Timings are based on actual CSV gaps scaled by speed, not uniform duration/speed
     // First row gets min delay (1ms), subsequent rows use actual gaps / speed
     expect(state.timings[0]).toBeGreaterThanOrEqual(1);

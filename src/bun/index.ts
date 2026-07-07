@@ -9,10 +9,10 @@ async function getMainViewUrl(): Promise<string> {
 	if (channel === "dev") {
 		try {
 			await fetch(DEV_SERVER_URL, { method: "HEAD" });
-			console.info(`HMR enabled: Using Vite dev server at ${DEV_SERVER_URL}`);
+			console.warn(`HMR enabled: Using Vite dev server at ${DEV_SERVER_URL}`);
 			return DEV_SERVER_URL;
 		} catch {
-			console.info(
+			console.warn(
 				"Vite dev server not running. Run 'bun run dev:hmr' for HMR support.",
 			);
 		}
@@ -34,4 +34,4 @@ new BrowserWindow({
 	},
 });
 
-console.info("React Tailwind Vite app started!");
+console.warn("React Tailwind Vite app started!");

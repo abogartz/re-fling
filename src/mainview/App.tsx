@@ -109,6 +109,7 @@ function App() {
     timings: [],
     filteredData: [],
     timeseries: { timestamps: [], rpsValues: [] },
+    actualDurationMs: 0,
   });
   const engineRef = useRef<ReplayEngine | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -131,8 +132,12 @@ function App() {
         (c) => c.toLowerCase() === "datetime",
       );
       const mapping: { url?: string; datetime?: string } = {};
-      if (urlCol) mapping.url = urlCol;
-      if (dtCol) mapping.datetime = dtCol;
+      if (urlCol) {
+        mapping.url = urlCol;
+      }
+      if (dtCol) {
+        mapping.datetime = dtCol;
+      }
       setColumnMapping(mapping);
 
       // If both auto-selected, parse with mapping immediately
@@ -173,11 +178,13 @@ function App() {
   }, []);
 
   const startReplay = useCallback(() => {
-    if (!parsedData) {return;}
+    if (!parsedData) {
+      return;
+    }
     const engine = new ReplayEngine();
     engineRef.current = engine;
     // Expose engine for E2E testing
-    (window as any).__engineRef = engine;
+    (window as unknown as Record<string, unknown>).__engineRef = engine;
 
     const effectiveDurationMs = getEffectiveDurationMs();
     const config: ReplayConfig = {
@@ -204,6 +211,7 @@ function App() {
     );
 
     engine.start();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parsedData, speed, baseUrl, filterPatterns, durationEnabled, durationValue, durationUnit]);
 
   // Re-parse with column mapping when mapping changes
@@ -234,6 +242,7 @@ function App() {
   // Recalculate timeseries when mapped data changes (e.g. mapping update)
   useEffect(() => {
     recalcTimeseries();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parsedData]);
 
   // Effective duration in ms from UI controls

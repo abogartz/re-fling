@@ -74,7 +74,7 @@ export class ReplayEngine {
     // Auto-set duration to actual CSV span if not provided or zero
     const effectiveConfig = {
       ...config,
-      duration: config.duration > 0 ? config.duration : this.actualDurationMs,
+      duration: config.duration && config.duration > 0 ? config.duration : this.actualDurationMs,
     };
     
     this.config = effectiveConfig;
@@ -137,8 +137,7 @@ export class ReplayEngine {
     }
 
     return rows.filter((row) =>
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      !this.config!.filterPatterns.some((pattern) => {
+      !(this.config?.filterPatterns ?? []).some((pattern) => {
         try {
           return new RegExp(pattern, "i").test(row.url);
         } catch {
@@ -172,8 +171,8 @@ export class ReplayEngine {
     const csvDuration = this.calculateActualDuration(this.csvData);
     
     // Calculate effective playback duration (accounts for speed)
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const effectiveDurationMs = this.config!.duration / this.config!.speed;
+    const effectiveDurationMs =
+      (this.config?.duration ?? 0) / (this.config?.speed ?? 1);
     
     // Determine time bins (1 second intervals)
     const binSizeMs = 1000; // 1 second bins
@@ -202,7 +201,7 @@ export class ReplayEngine {
       }
       
       // Scale RPS by speed (more requests per second at higher speeds)
-      const rps = Math.round(countInBin * this.config!.speed);
+      const rps = Math.round(countInBin * (this.config?.speed ?? 1));
       rpsValues.push(rps);
       timestamps.push(binStart);
     }
@@ -258,7 +257,8 @@ export class ReplayEngine {
     const elapsed = Date.now() - this.startTime;
     
     // Check if we've exceeded the target duration
-    if (elapsed >= this.config.duration) {
+    const targetDuration = this.config?.duration;
+    if (targetDuration && elapsed >= targetDuration) {
       this.state = { ...this.state, status: "completed", progress: 1 };
       this.emit();
       return;
@@ -285,7 +285,10 @@ export class ReplayEngine {
     }
 
     // Calculate progress based on elapsed time vs target duration
-    const progress = Math.min(1, elapsed / this.config.duration);
+    const progress =
+      targetDuration && targetDuration > 0
+        ? Math.min(1, elapsed / targetDuration)
+        : 1;
     
     // Total requests completed so far (for display purposes)
     const completed = this.currentRow;

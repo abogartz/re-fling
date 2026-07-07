@@ -29,12 +29,12 @@ beforeAll(async () => {
       }
       const [status, body] = entry;
       return new Response(body, {
-        status,
+        status: status ?? 200,
         headers: { "Content-Type": "application/json" },
       });
     },
   });
-  mockServer = { port: server.port };
+  mockServer = { port: server.port ?? 0 };
 });
 
 function mockUrl(path: string): string {
@@ -81,7 +81,7 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
     await new Promise((r) => setTimeout(r, 350));
 
     const state = engine.getState();
-    console.log(
+    console.warn(
       `[GREEN] completed=${state.completedRequests}/{n=2} | ` +
       `status=${state.status} | elapsed=${state.elapsed}ms`,
     );
@@ -103,7 +103,7 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
     await new Promise((r) => setTimeout(r, 250));
 
     const state = engine.getState();
-    console.log(`[GREEN] errors=${state.errors} | status=${state.status}`);
+    console.warn(`[GREEN] errors=${state.errors} | status=${state.status}`);
     expect(state.errors).toBeGreaterThanOrEqual(1);
   });
 
@@ -129,7 +129,7 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
     await new Promise((r) => setTimeout(r, 200));
 
     const finalState = engine.getState();
-    console.log(
+    console.warn(
       `[GREEN] elapsed=${finalState.elapsed} | status=${finalState.status}`,
     );
 
@@ -142,7 +142,10 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
     const badData = [{ datetime: new Date(), url: "http://192.0.2.1/timeout-test" }];
     // RFC5737 TEST-NET-1; requests will fail. Engine must keep running per agreement.
     const config: ReplayConfig = {
-      baseUrl: "", filterPatterns: [],
+      speed: 1.0,
+      duration: 0,
+      baseUrl: "",
+      filterPatterns: [],
     };
 
     engine.setData(badData, config);
@@ -152,7 +155,7 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
     await new Promise((r) => setTimeout(r, 350));
 
     const state = engine.getState();
-    console.log(`[GREEN] status=${state.status} | errors=${state.errors}`);
+    console.warn(`[GREEN] status=${state.status} | errors=${state.errors}`);
     expect(state.status).not.toEqual("error");
   });
 });
