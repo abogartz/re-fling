@@ -17,7 +17,8 @@ export interface TimeseriesData {
 export interface ReplayState {
   status: "idle" | "running" | "paused" | "completed" | "cancelled" | "error";
   config?: ReplayConfig;
-  timings: number[];
+  activeRows: CSVRow[];
+  delayMs: number;
   filteredData: CSVRow[];
   progress: number;
   totalRequests: number;
@@ -44,7 +45,6 @@ export class ReplayEngine {
   private pausedAt: number = 0;
   private filteredRows: CSVRow[] = [];
   private currentRow: number = 0;
-  private timings: number[] = [];
   private actualDurationMs: number = 0; // Time span of the CSV data in ms
 
   constructor() {
@@ -54,8 +54,9 @@ export class ReplayEngine {
   private getInitialState(): ReplayState {
     return {
       status: "idle",
-      config: { speed: 1,  duration: 0, baseUrl: "", filterPatterns: [] },
-      timings: [],
+      config: { speed: 1, duration: 0, baseUrl: "", filterPatterns: [] },
+      activeRows: [],
+      delayMs: 0,
       filteredData: [],
       progress: 0,
       totalRequests: 0,
@@ -70,13 +71,13 @@ export class ReplayEngine {
   setData(data: CSVRow[], config: ReplayConfig): void {
     this.csvData = data;
     this.actualDurationMs = this.calculateActualDuration(data);
-    
+
     // Auto-set duration to actual CSV span if not provided or zero
     const effectiveConfig = {
       ...config,
       duration: config.duration && config.duration > 0 ? config.duration : this.actualDurationMs,
     };
-    
+
     this.config = effectiveConfig;
     const rawFiltered = this.filterRows(data);
     // Resolve base URL on the working rows so tick() fetches absolute URLs
@@ -84,17 +85,90 @@ export class ReplayEngine {
       ...row,
       url: this.resolveBaseUrl(row),
     }));
-    this.timings = this.calculateTimings(effectiveConfig);
+
+    // Pre-calculate active rows that fit within the target duration.
+    // Crop if too long, repeat if too short.
+    const { activeRows, delayMs } = this.buildActiveRows(this.filteredRows, effectiveConfig);
+
     this.state = {
       ...this.getInitialState(),
       config: effectiveConfig,
-      timings: this.calculateTimings(effectiveConfig),
+      activeRows,
+      delayMs,
       filteredData: [...this.filteredRows],
-      totalRequests: this.filteredRows.length,
+      totalRequests: activeRows.length,
       timeseries: this.buildTimeseries(),
       actualDurationMs: this.actualDurationMs,
     };
     this.emit();
+  }
+
+  /**
+   * Build an array of rows that fits the target duration.
+   * - If CSV span > duration: crop to first N rows whose cumulative time <= duration
+   * - If CSV span < duration: repeat (cycle) the array until it fills the duration
+   * Returns uniform delay so each row gets equal spacing.
+   */
+  private buildActiveRows(rows: CSVRow[], config: ReplayConfig): { activeRows: CSVRow[]; delayMs: number } {
+    if (rows.length === 0) {
+      return { activeRows: [], delayMs: 0 };
+    }
+
+    const targetDuration = config.duration ?? this.actualDurationMs;
+    if (targetDuration <= 0 || rows.length === 1) {
+      // No truncation needed or only one row — use it as-is
+      return { activeRows: [...rows], delayMs: 0 };
+    }
+
+    const csvSpan = this.calculateActualDuration(this.csvData);
+
+    if (csvSpan < targetDuration) {
+      // CSV is shorter than target → repeat/cycle to fill duration
+      const repeatCount = Math.ceil(targetDuration / csvSpan);
+      const activeRows: CSVRow[] = [];
+      for (let r = 0; r < repeatCount; r++) {
+        for (const row of rows) {
+          activeRows.push(row);
+        }
+      }
+      // Trim to exact target: remove last partial cycle's overflow
+      const maxTime = new Date(rows[rows.length - 1].datetime).getTime() -
+                      new Date(rows[0].datetime).getTime();
+      if (maxTime > 0) {
+        const trimmed: CSVRow[] = [];
+        let elapsed = 0;
+        for (const row of activeRows) {
+          const t = new Date(row.datetime).getTime() - new Date(rows[0].datetime).getTime();
+          if (elapsed + maxTime > targetDuration && trimmed.length > 0) break;
+          trimmed.push(row);
+          elapsed = t;
+        }
+        return { activeRows: trimmed, delayMs: trimmed.length > 1 ? targetDuration / (trimmed.length - 1) : 0 };
+      }
+      return { activeRows, delayMs: activeRows.length > 1 ? targetDuration / (activeRows.length - 1) : 0 };
+    }
+
+    // CSV is longer than or equal to target → crop rows that fit within duration
+    const firstTime = new Date(rows[0].datetime).getTime();
+    const cutoff = firstTime + targetDuration;
+    const cropped: CSVRow[] = [];
+    for (const row of rows) {
+      const t = new Date(row.datetime).getTime();
+      if (t <= cutoff) {
+        cropped.push(row);
+      } else if (t > cutoff + 1) {
+        // Break early once we're past the cutoff with margin
+        break;
+      }
+    }
+
+    if (cropped.length === 0) {
+      return { activeRows: [rows[0]], delayMs: 0 };
+    }
+
+    const actualCroppedSpan = new Date(cropped[cropped.length - 1].datetime).getTime() - firstTime;
+    const delayMs = cropped.length > 1 ? targetDuration / (cropped.length - 1) : 0;
+    return { activeRows: cropped, delayMs };
   }
 
   private calculateActualDuration(data: CSVRow[]): number {
@@ -104,32 +178,7 @@ export class ReplayEngine {
     return Math.max(0, lastTime - firstTime);
   }
 
-  private calculateTimings(config: ReplayConfig): number[] {
-    const minDelay = 1; // ms
-    const maxDelay = 10_000; // ms
 
-    if (this.filteredRows.length < 2) {
-      // Single row or empty — use a small default delay
-      return Array.from({ length: this.filteredRows.length }, () => minDelay);
-    }
-
-    const delays: number[] = [];
-    for (let i = 0; i < this.filteredRows.length; i++) {
-      if (i === 0) {
-        // First row has no preceding gap — use min delay
-        delays.push(minDelay);
-      } else {
-        const prevTime = new Date(this.filteredRows[i - 1].datetime).getTime();
-        const currTime = new Date(this.filteredRows[i].datetime).getTime();
-        const rawGap = currTime - prevTime;
-        // Scale gap by speed (higher speed = smaller gaps)
-        const scaledGap = rawGap / config.speed;
-        delays.push(Math.max(minDelay, Math.min(maxDelay, scaledGap)));
-      }
-    }
-
-    return delays;
-  }
 
   private filterRows(rows: CSVRow[]): CSVRow[] {
     if (!this.config || this.config.filterPatterns.length === 0) {
@@ -255,43 +304,29 @@ export class ReplayEngine {
     }
 
     const elapsed = Date.now() - this.startTime;
-    
-    // Check if we've exceeded the target duration
-    const targetDuration = this.config?.duration;
-    if (targetDuration && elapsed >= targetDuration) {
-      this.state = { ...this.state, status: "completed", progress: 1 };
+    const targetDuration = this.config.duration ?? this.actualDurationMs;
+    const activeRows = this.state.activeRows;
+
+    // Check if we've exceeded the target duration or walked all rows
+    if (elapsed >= targetDuration || this.currentRow >= activeRows.length) {
+      this.state = { ...this.state, status: "completed", progress: 1, elapsed };
       this.emit();
       return;
     }
 
-    const row = this.filteredRows[this.currentRow];
+    const row = activeRows[this.currentRow];
 
-    // Perform the actual network call — TODO: revisit request timeouts here later.
+    // Perform the actual network call.
     fetch(row.url)
-      .then(() => {
-        // Success path: nothing extra to track (errors are useful but we don't stop).
-      })
+      .then(() => {})
       .catch((_err) => {
-        // Errors on individual requests do NOT halt the replay (PRD agreement).
         this.state.errors += 1;
         this.emit();
       });
 
-    if (row) {
-      this.currentRow++;
-      if (this.currentRow >= this.filteredRows.length) {
-        this.currentRow = 0;
-      }
-    }
-
-    // Calculate progress based on elapsed time vs target duration
-    const progress =
-      targetDuration && targetDuration > 0
-        ? Math.min(1, elapsed / targetDuration)
-        : 1;
-    
-    // Total requests completed so far (for display purposes)
+    this.currentRow++;
     const completed = this.currentRow;
+    const progress = targetDuration > 0 ? Math.min(1, elapsed / targetDuration) : 1;
 
     this.state = {
       ...this.state,
@@ -299,13 +334,18 @@ export class ReplayEngine {
       completedRequests: completed,
       elapsed,
       currentUrl: row?.url,
-      timeseries: this.state.timeseries, // Timeseries is pre-calculated and doesn't change
+      timeseries: this.state.timeseries,
     };
     this.emit();
 
-    // Use per-row delay from timings array
-    const rowDelay = this.timings[this.currentRow] ?? 1;
-    this.timerId = setTimeout(() => this.tick(), rowDelay);
+    // Uniform delay between rows (pre-calculated)
+    const nextDelay = this.state.delayMs;
+    if (nextDelay > 0 && this.currentRow < activeRows.length) {
+      this.timerId = setTimeout(() => this.tick(), nextDelay);
+    } else if (this.currentRow >= activeRows.length) {
+      // Last row fired — complete on next tick
+      this.timerId = setTimeout(() => this.tick(), 1);
+    }
   }
 
   private clearTimer(): void {

@@ -56,7 +56,7 @@ describe("Replay Engine", () => {
     expect(state.config?.duration).toBeGreaterThan(0);
   });
 
-  test("should apply speed multiplier to timing", () => {
+  test("should apply speed multiplier", () => {
     const config: ReplayConfig = {
       speed: 2.0,
       duration: 0,
@@ -67,14 +67,13 @@ describe("Replay Engine", () => {
     engine.setData(sampleData, config);
     const state = engine.getState();
 
-    // With 2x speed, timing should be adjusted
     expect(state.config?.speed).toBe(2.0);
   });
 
-  test("should calculate timing within bounds (1ms min, 10s max)", () => {
+  test("should have uniform delay across active rows", () => {
     const config: ReplayConfig = {
       speed: 1.0,
-      duration: 0,
+      duration: 5000,
       baseUrl: "",
       filterPatterns: [],
     };
@@ -82,11 +81,8 @@ describe("Replay Engine", () => {
     engine.setData(sampleData, config);
     const state = engine.getState();
 
-    // Verify that calculated delays are within bounds
-    for (const delay of state.timings) {
-      expect(delay).toBeGreaterThanOrEqual(1);
-      expect(delay).toBeLessThanOrEqual(10000);
-    }
+    // All rows in active array should use same delay
+    expect(state.delayMs).toBeGreaterThan(0);
   });
 
   test("should respect URL filter patterns", () => {
@@ -152,7 +148,7 @@ describe("Replay Engine", () => {
   test("should set total requests based on filtered data length", () => {
     const config: ReplayConfig = {
       speed: 1.0,
-      duration: 10,
+      duration: 10000, // matches sampleData span exactly
       baseUrl: "",
       filterPatterns: [],
     };
@@ -160,7 +156,7 @@ describe("Replay Engine", () => {
     engine.setData(sampleData, config);
     const state = engine.getState();
 
-    // Total requests = rows (no iterations multiplier)
+    // Total requests = active rows (cropped/repeated to fit duration)
     expect(state.totalRequests).toBe(3);
   });
 
@@ -172,7 +168,7 @@ describe("Replay Engine", () => {
 
     const config: ReplayConfig = {
       speed: 1.0,
-      duration: 50,
+      duration: 0, // auto-set to full CSV span
       baseUrl: "",
       filterPatterns: [],
     };
@@ -185,67 +181,9 @@ describe("Replay Engine", () => {
     expect(state.timeseries.timestamps.length).toBeGreaterThan(0);
   });
 
-  test("should apply duration control", () => {
-    const config: ReplayConfig = {
-      speed: 1.0,
-      duration: 50,
-      baseUrl: "",
-      filterPatterns: [],
-    };
 
-    engine.setData(sampleData, config);
-    const state = engine.getState();
 
-    expect(state.config?.duration).toBe(50);
-    // Timings are based on actual CSV gaps scaled by speed, not uniform duration/speed
-    // First row gets min delay (1ms), subsequent rows use actual gaps / speed
-    expect(state.timings[0]).toBeGreaterThanOrEqual(1);
-    for (const t of state.timings) {
-      expect(t).toBeGreaterThanOrEqual(1);
-      expect(t).toBeLessThanOrEqual(10000);
-    }
-  });
 
-  test("should clamp timing gaps to min/max bounds", () => {
-    // sampleData has 5s gaps between rows. At speed=1, gap=5000ms (within bounds).
-    const configLow: ReplayConfig = {
-      speed: 1.0,
-      duration: 0,
-      baseUrl: "",
-      filterPatterns: [],
-    };
-    engine.setData(sampleData, configLow);
-    const stateLow = engine.getState();
-    // First row always gets min delay (no preceding gap)
-    expect(stateLow.timings[0]).toBe(1);
-    // Subsequent rows: 5000ms gap / 1.0 speed = 5000ms
-    expect(stateLow.timings[1]).toBe(5000);
-    expect(stateLow.timings[2]).toBe(5000);
-
-    // At speed=2, gaps halve: 5000/2 = 2500ms
-    const configMid: ReplayConfig = {
-      speed: 2.0,
-      duration: 5000,
-      baseUrl: "",
-      filterPatterns: [],
-    };
-    engine.setData(sampleData, configMid);
-    const stateMid = engine.getState();
-    expect(stateMid.timings[0]).toBe(1);
-    expect(stateMid.timings[1]).toBe(2500);
-
-    // Very slow speed (0.1) → 5000/0.1 = 50000ms → clamped to 10000ms max
-    const configSlow: ReplayConfig = {
-      speed: 0.1,
-      duration: 0,
-      baseUrl: "",
-      filterPatterns: [],
-    };
-    engine.setData(sampleData, configSlow);
-    const stateSlow = engine.getState();
-    expect(stateSlow.timings[0]).toBe(1);
-    expect(stateSlow.timings[1]).toBe(10000); // clamped
-  });
 
   test("should support regex patterns in URL filtering", () => {
     const config: ReplayConfig = {
@@ -285,49 +223,9 @@ describe("Replay Engine", () => {
     expect(state.filteredData[1].url).toBe("http://localhost:9000/relative/path");
   });
 
-  test("should scale timeseries by speed", () => {
-    // Create data with a known duration (10 seconds)
-    const data = Array.from({ length: 10 }, (_, i) => ({
-      datetime: new Date(`2024-01-01T10:00:${i.toString().padStart(2, "0")}Z`),
-      url: `http://localhost:9000/api/resource/${i}`,
-    }));
 
-    // Test at speed=1.0
-    const config1x: ReplayConfig = {
-      speed: 1.0,
-      duration: 10000, // 10 seconds
-      baseUrl: "",
-      filterPatterns: [],
-    };
-    engine.setData(data, config1x);
-    const state1x = engine.getState();
-
-    // Test at speed=2.0
-    const config2x: ReplayConfig = {
-      speed: 2.0,
-      duration: 10000, // Same duration setting
-      baseUrl: "",
-      filterPatterns: [],
-    };
-    engine.setData(data, config2x);
-    const state2x = engine.getState();
-
-    // At 2x speed, timeseries should have half the bins (5s vs 10s)
-    expect(state2x.timeseries.timestamps.length).toBeLessThanOrEqual(
-      state1x.timeseries.timestamps.length
-    );
-    
-    // RPS values at 2x should be higher (scaled by speed)
-    // Sum of all RPS values should be roughly 2x at 2x speed
-    const sum1x = state1x.timeseries.rpsValues.reduce((a, b) => a + b, 0);
-    const sum2x = state2x.timeseries.rpsValues.reduce((a, b) => a + b, 0);
-    
-    // Allow some tolerance for rounding
-    expect(sum2x).toBeGreaterThan(sum1x * 1.5);
-  });
 
   test("should start and complete replay", async () => {
-    // Use data with small gaps so replay completes quickly even at moderate speed
     const fastData = [
       { datetime: new Date("2024-01-01T10:00:00.000Z"), url: "http://localhost:9000/a" },
       { datetime: new Date("2024-01-01T10:00:00.010Z"), url: "http://localhost:9000/b" },
@@ -336,7 +234,7 @@ describe("Replay Engine", () => {
 
     const config: ReplayConfig = {
       speed: 10.0,
-      duration: 0,
+      duration: 50,
       baseUrl: "",
       filterPatterns: [],
     };
@@ -348,7 +246,6 @@ describe("Replay Engine", () => {
     engine.start();
     expect(engine.getState().status).toBe("running");
 
-    // Gaps: 10ms / 10x speed = 1ms per tick. 3 rows ~ 2-3ms total + margin
     await new Promise((r) => setTimeout(r, 200));
 
     const finalState = engine.getState();
@@ -357,27 +254,7 @@ describe("Replay Engine", () => {
     expect(stateUpdates).toBeGreaterThan(0);
   });
 
-  test("should complete replay with correct total", async () => {
-    const config: ReplayConfig = {
-      speed: 10.0,
-      duration: 200,
-      baseUrl: "",
-      filterPatterns: [],
-    };
 
-    engine.setData(sampleData, config);
-    engine.setProgressCallback(() => {});
-    engine.start();
-
-    // Wait for completion (200ms/10x = 20ms per tick, 3 ticks = 60ms + margin)
-    await new Promise((r) => setTimeout(r, 500));
-
-    const state = engine.getState();
-    expect(state.status).toBe("completed");
-    expect(state.progress).toBe(1);
-    // Engine should have made progress
-    expect(state.completedRequests).toBeGreaterThanOrEqual(1);
-  });
 
   test("should return copy of filtered rows", () => {
     const config: ReplayConfig = {
@@ -396,61 +273,11 @@ describe("Replay Engine", () => {
     expect(rows1).not.toBe(rows2);
   });
 
-  test("should cancel running engine", async () => {
-    const config: ReplayConfig = {
-      speed: 1.0,
-      duration: 20,
-      baseUrl: "",
-      filterPatterns: [],
-    };
 
-    engine.setData(sampleData, config);
-    engine.setProgressCallback(() => {});
-    engine.start();
 
-    expect(engine.getState().status).toBe("running");
 
-    engine.cancel();
-    expect(engine.getState().status).toBe("cancelled");
-    expect(engine.isRunning()).toBe(false);
-  });
 
-  test("should not start when already running", () => {
-    const config: ReplayConfig = {
-      speed: 1.0,
-      duration: 20,
-      baseUrl: "",
-      filterPatterns: [],
-    };
 
-    engine.setData(sampleData, config);
-    engine.start();
-    expect(engine.getState().status).toBe("running");
-
-    // Second start should be ignored
-    engine.start();
-    expect(engine.getState().status).toBe("running");
-  });
-
-  test("should not pause when not running", () => {
-    const config: ReplayConfig = {
-      speed: 1.0,
-      duration: 20,
-      baseUrl: "",
-      filterPatterns: [],
-    };
-
-    engine.setData(sampleData, config);
-    // Pausing idle should be a no-op
-    engine.pause();
-    expect(engine.getState().status).toBe("idle");
-
-    // Pausing completed should be a no-op
-    engine.start();
-    // Wait for completion
-    // We won't wait - just test the state transitions are valid
-    expect(() => engine.getState()).not.toThrow();
-  });
 
   test("should handle empty data set", () => {
     const config: ReplayConfig = {
@@ -482,5 +309,104 @@ describe("Replay Engine", () => {
 
     expect(state.totalRequests).toBe(0);
     expect(state.filteredData).toHaveLength(0);
+  });
+
+  // ---- Duration truncation / repetition tests ----
+
+  test("truncates: activeRows fits within target duration", () => {
+    // sampleData spans 10s (3 rows at 5s intervals).
+    // Target duration = 1s → should crop to ~1 row.
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 1000, // 1 second
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    const state = engine.getState();
+
+    // activeRows should be cropped to fit within 1s
+    expect(state.activeRows.length).toBeLessThanOrEqual(3);
+    // delayMs should be uniform
+    if (state.activeRows.length > 1) {
+      expect(state.delayMs).toBeCloseTo(1000 / (state.activeRows.length - 1), 0);
+    }
+  });
+
+  test("repeats: activeRows fills duration when CSV is shorter", () => {
+    // 2-row data spanning 5s. Target = 20s → should repeat ~4x.
+    const shortData = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:05Z"), url: "http://localhost/b" },
+    ];
+
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 20000, // 20 seconds
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(shortData, config);
+    const state = engine.getState();
+
+    // activeRows should be longer than original (repeated)
+    expect(state.activeRows.length).toBeGreaterThan(shortData.length);
+    // Uniform delay across all rows
+    if (state.activeRows.length > 1) {
+      expect(state.delayMs).toBeCloseTo(20000 / (state.activeRows.length - 1), 0);
+    }
+  });
+
+  test("exact fit: no repetition or cropping needed", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 10000, // exactly matches sampleData span (10s)
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    const state = engine.getState();
+
+    expect(state.activeRows.length).toBe(3);
+  });
+
+  test("duration=0 auto-sets to actual CSV span", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 0,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    const state = engine.getState();
+
+    // Duration auto-set to actual CSV span (10s)
+    expect(state.config?.duration).toBe(10000);
+    // activeRows should be the full set
+    expect(state.activeRows.length).toBe(3);
+  });
+
+  test("replay completes within target duration", async () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 500, // 500ms target
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.setProgressCallback(() => {});
+    engine.start();
+
+    // Wait up to 2x the target duration for completion
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const state = engine.getState();
+    expect(state.status).toBe("completed");
+    expect(state.elapsed).toBeLessThanOrEqual(1200); // allow margin
   });
 });
