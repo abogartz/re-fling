@@ -97,7 +97,7 @@ export class ReplayEngine {
       delayMs,
       filteredData: [...this.filteredRows],
       totalRequests: activeRows.length,
-      timeseries: this.buildTimeseries(),
+      timeseries: this.buildTimeseriesForRows(activeRows, effectiveConfig),
       actualDurationMs: this.actualDurationMs,
     };
     this.emit();
@@ -109,6 +109,15 @@ export class ReplayEngine {
    * - If CSV span < duration: repeat (cycle) the array until it fills the duration
    * Returns uniform delay so each row gets equal spacing.
    */
+  /**
+   * Calculate how many rows would be in the active set for the given config.
+   * Used to preview the total request count before starting replay.
+   */
+  public calculateActiveRowsCount(rows: CSVRow[], config: ReplayConfig): number {
+    const { activeRows } = this.buildActiveRows(rows, config);
+    return activeRows.length;
+  }
+
   private buildActiveRows(rows: CSVRow[], config: ReplayConfig): { activeRows: CSVRow[]; delayMs: number } {
     if (rows.length === 0) {
       return { activeRows: [], delayMs: 0 };
@@ -123,29 +132,47 @@ export class ReplayEngine {
     const csvSpan = this.calculateActualDuration(this.csvData);
 
     if (csvSpan < targetDuration) {
-      // CSV is shorter than target → repeat/cycle to fill duration
-      const repeatCount = Math.ceil(targetDuration / csvSpan);
+      // CSV is shorter than target → repeat/cycle to fill duration.
+      // Preserve internal gaps within each cycle; add uniform gap between cycles.
+      // Gap = average gap from original CSV, adjusted for speed.
+      const avgGap = csvSpan / (rows.length - 1);
+      const effectiveGap = avgGap / (config.speed ?? 1);
+      
+      const firstRowTime = new Date(rows[0].datetime).getTime();
       const activeRows: CSVRow[] = [];
-      for (let r = 0; r < repeatCount; r++) {
+      let cycleOffset = 0;
+      
+      while (true) {
+        // Add the entire sequence for this cycle with offset
+        let cycleExceedsTarget = false;
         for (const row of rows) {
-          activeRows.push(row);
+          const rowTime = new Date(row.datetime).getTime();
+          // Normalize to relative time from first row, then add cycle offset
+          const relativeTime = rowTime - firstRowTime;
+          const shiftedTime = relativeTime + cycleOffset;
+          if (shiftedTime > targetDuration) {
+            cycleExceedsTarget = true;
+            break;
+          }
+          const shiftedRow: CSVRow = {
+            ...row,
+            datetime: new Date(firstRowTime + shiftedTime)
+          };
+          activeRows.push(shiftedRow);
         }
-      }
-      // Trim to exact target: remove last partial cycle's overflow
-      const maxTime = new Date(rows[rows.length - 1].datetime).getTime() -
-                      new Date(rows[0].datetime).getTime();
-      if (maxTime > 0) {
-        const trimmed: CSVRow[] = [];
-        let elapsed = 0;
-        for (const row of activeRows) {
-          const t = new Date(row.datetime).getTime() - new Date(rows[0].datetime).getTime();
-          if (elapsed + maxTime > targetDuration && trimmed.length > 0) break;
-          trimmed.push(row);
-          elapsed = t;
+        
+        if (cycleExceedsTarget) {
+          // Don't start another cycle
+          break;
         }
-        return { activeRows: trimmed, delayMs: trimmed.length > 1 ? targetDuration / (trimmed.length - 1) : 0 };
+        
+        // Advance offset for next cycle: original span + gap
+        cycleOffset += csvSpan + effectiveGap;
       }
-      return { activeRows, delayMs: activeRows.length > 1 ? targetDuration / (activeRows.length - 1) : 0 };
+      
+      // Calculate uniform delay for tick() pacing (not used for timeseries)
+      const delayMs = activeRows.length > 1 ? targetDuration / (activeRows.length - 1) : 0;
+      return { activeRows, delayMs };
     }
 
     // CSV is longer than or equal to target → crop rows that fit within duration
@@ -166,7 +193,6 @@ export class ReplayEngine {
       return { activeRows: [rows[0]], delayMs: 0 };
     }
 
-    const actualCroppedSpan = new Date(cropped[cropped.length - 1].datetime).getTime() - firstTime;
     const delayMs = cropped.length > 1 ? targetDuration / (cropped.length - 1) : 0;
     return { activeRows: cropped, delayMs };
   }
@@ -211,47 +237,48 @@ export class ReplayEngine {
     return fullUrl;
   }
 
-  private buildTimeseries(): TimeseriesData {
-    if (this.filteredRows.length === 0 || this.config?.duration === 0) {
+  private buildTimeseriesForRows(activeRows: CSVRow[], config: ReplayConfig): TimeseriesData {
+    if (activeRows.length === 0) {
       return { timestamps: [], rpsValues: [] };
     }
 
-    // Calculate the actual duration from CSV timestamps
-    const csvDuration = this.calculateActualDuration(this.csvData);
-    
+    const targetDuration = config.duration ?? this.actualDurationMs;
+    if (targetDuration <= 0) {
+      return { timestamps: [], rpsValues: [] };
+    }
+
     // Calculate effective playback duration (accounts for speed)
-    const effectiveDurationMs =
-      (this.config?.duration ?? 0) / (this.config?.speed ?? 1);
+    const effectiveDurationMs = targetDuration / (config.speed ?? 1);
     
     // Determine time bins (1 second intervals)
     const binSizeMs = 1000; // 1 second bins
-    const totalBins = Math.ceil(effectiveDurationMs / binSizeMs);
+    const totalBins = Math.floor(effectiveDurationMs / binSizeMs) + 1;
     
-    // Calculate RPS for each bin
+    // Calculate RPS for each bin based on actual activeRows timing
     const rpsValues: number[] = [];
     const timestamps: number[] = [];
+    
+    // Get the first row's time as reference point
+    const firstRowTime = new Date(activeRows[0].datetime).getTime();
     
     for (let i = 0; i < totalBins; i++) {
       const binStart = i * binSizeMs;
       const binEnd = (i + 1) * binSizeMs;
       
-      // Count requests that would fall in this time bin during playback
+      // Count requests that fall in this time bin
       let countInBin = 0;
-      for (const row of this.filteredRows) {
-        const csvTime = new Date(row.datetime).getTime();
-        // Normalize CSV time to 0-1 range based on actual CSV duration
-        const normalizedTime = csvDuration > 0 ? (csvTime - new Date(this.csvData[0].datetime).getTime()) / csvDuration : 0;
-        // Map to playback time using effective duration
-        const playbackTime = normalizedTime * effectiveDurationMs;
+      for (const row of activeRows) {
+        const rowTime = new Date(row.datetime).getTime();
+        // Calculate playback time as offset from first row, scaled by speed
+        const offsetFromFirst = rowTime - firstRowTime;
+        const playbackTime = offsetFromFirst / (config.speed ?? 1);
         
         if (playbackTime >= binStart && playbackTime < binEnd) {
           countInBin++;
         }
       }
       
-      // Scale RPS by speed (more requests per second at higher speeds)
-      const rps = Math.round(countInBin * (this.config?.speed ?? 1));
-      rpsValues.push(rps);
+      rpsValues.push(countInBin);
       timestamps.push(binStart);
     }
     
@@ -307,8 +334,8 @@ export class ReplayEngine {
     const targetDuration = this.config.duration ?? this.actualDurationMs;
     const activeRows = this.state.activeRows;
 
-    // Check if we've exceeded the target duration or walked all rows
-    if (elapsed >= targetDuration || this.currentRow >= activeRows.length) {
+    // Check if we've walked all rows (always complete all rows)
+    if (this.currentRow >= activeRows.length) {
       this.state = { ...this.state, status: "completed", progress: 1, elapsed };
       this.emit();
       return;

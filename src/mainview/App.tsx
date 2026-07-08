@@ -45,7 +45,7 @@ function calculateExpectedTimeseries(
   
   // Use 1-second bins for accurate RPS calculation
   const binSizeMs = 1000; // 1 second
-  const totalBins = Math.ceil(effectiveDurationMs / binSizeMs);
+  const totalBins = Math.floor(effectiveDurationMs / binSizeMs) + 1;
   
   // Calculate RPS for each bin
   const rpsValues: number[] = [];
@@ -90,6 +90,14 @@ function App() {
   const [durationEnabled, setDurationEnabled] = useState(false);
   const [durationValue, setDurationValue] = useState(100);
   const [durationUnit, setDurationUnit] = useState<"seconds" | "minutes" | "hours">("seconds");
+  
+  // Refs for current duration values (avoids stale closure in handlers)
+  const durationValueRef = useRef(durationValue);
+  const durationUnitRef = useRef(durationUnit);
+  const durationEnabledRef = useRef(durationEnabled);
+  durationValueRef.current = durationValue;
+  durationUnitRef.current = durationUnit;
+  durationEnabledRef.current = durationEnabled;
   const [baseUrl, setBaseUrl] = useState("");
   const [filterPatterns, setFilterPatterns] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -247,10 +255,10 @@ function App() {
 
   // Effective duration in ms from UI controls
   const getEffectiveDurationMs = useCallback((): number => {
-    if (!durationEnabled || durationValue <= 0) { return 0; }
+    if (!durationEnabledRef.current || durationValueRef.current <= 0) { return 0; }
     const multipliers: Record<string, number> = { seconds: 1000, minutes: 60_000, hours: 3_600_000 };
-    return durationValue * (multipliers[durationUnit] ?? 1000);
-  }, [durationEnabled, durationValue, durationUnit]);
+    return durationValueRef.current * (multipliers[durationUnitRef.current] ?? 1000);
+  }, []);
 
   // Recalculate timeseries when controls change
   const recalcTimeseries = useCallback(() => {
@@ -258,11 +266,45 @@ function App() {
     const csvDuration = calculateActualDuration(parsedData.data);
     const overrideMs = getEffectiveDurationMs();
     const effectiveDuration = overrideMs > 0 ? overrideMs : csvDuration;
+    const ts = calculateExpectedTimeseries(parsedData.data, effectiveDuration, speedRef.current);
+    
+    // Calculate how many rows would be in the active set (for preview)
+    let previewTotalRequests = parsedData.data.length;
+    if (effectiveDuration > 0 && csvDuration > 0) {
+      const repeatCount = Math.ceil(effectiveDuration / csvDuration);
+      previewTotalRequests = parsedData.data.length * repeatCount;
+      
+      // Trim overflow from last cycle
+      if (repeatCount > 1) {
+        const maxTime = new Date(parsedData.data[parsedData.data.length - 1].datetime).getTime() -
+                        new Date(parsedData.data[0].datetime).getTime();
+        if (maxTime > 0) {
+          let trimmed = 0;
+          let elapsed = 0;
+          for (let r = 0; r < repeatCount; r++) {
+            for (const row of parsedData.data) {
+              const t = new Date(row.datetime).getTime() - new Date(parsedData.data[0].datetime).getTime();
+              if (elapsed + maxTime > effectiveDuration && trimmed > 0) {
+                break;
+              }
+              trimmed++;
+              elapsed = t;
+            }
+          }
+          previewTotalRequests = trimmed;
+        }
+      }
+    }
+    
     setReplayState(prev => ({
       ...prev,
-      timeseries: calculateExpectedTimeseries(parsedData.data, effectiveDuration, speed),
+      timeseries: ts,
+      totalRequests: previewTotalRequests,
     }));
-  }, [parsedData, speed, getEffectiveDurationMs]);
+  }, [parsedData, getEffectiveDurationMs]);
+
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
 
   const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newSpeed = parseFloat(e.target.value) || 1;
@@ -273,11 +315,13 @@ function App() {
   const handleDurationValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value, 10);
     if (isNaN(val) || val < 0) { return; }
+    durationValueRef.current = val; // Update ref immediately (before state update)
     setDurationValue(val);
     recalcTimeseries();
   };
 
   const handleDurationUnitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    durationUnitRef.current = e.target.value as "seconds" | "minutes" | "hours";
     setDurationUnit(e.target.value as "seconds" | "minutes" | "hours");
     recalcTimeseries();
   };
@@ -295,8 +339,39 @@ function App() {
     error: "text-red-600",
   };
 
+  const openLogs = useCallback(() => {
+    (window as unknown as { __electrobunBunBridge?: { postMessage: (msg: string) => void } }).__electrobunBunBridge?.postMessage(
+      JSON.stringify({ type: "open-logs" }),
+    );
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#1a1a1a] p-2">
+      {/* Logs button - upper right */}
+      <button
+        onClick={openLogs}
+        title="View logs"
+        className="fixed top-3 right-3 z-50 bg-[#252525] border border-gray-700 rounded-lg p-1.5 hover:bg-[#333] transition-colors"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#d4d4d4"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+          <polyline points="10 9 9 9 8 9" />
+        </svg>
+      </button>
+
       <div className="max-w-4xl mx-auto">
         <h1 className="text-lg font-bold text-white mb-0.5">ReFling</h1>
         <p className="text-gray-400 text-xs mb-2">
@@ -340,6 +415,12 @@ function App() {
           {parsedData && (
             <p className="mt-1 text-green-400 text-xs">
               Loaded {parsedData.data.length} rows, {parsedData.columns.length} columns
+            </p>
+          )}
+          {/* Preview total requests when duration is overridden */}
+          {durationEnabledRef.current && replayState.totalRequests > 0 && (
+            <p className="mt-1 text-blue-400 text-xs">
+              Expected: {replayState.totalRequests} requests
             </p>
           )}
           {/* Progress - inline with controls */}
@@ -386,6 +467,7 @@ function App() {
                     type="checkbox"
                     checked={durationEnabled}
                     onChange={(e) => {
+                      durationEnabledRef.current = e.target.checked;
                       setDurationEnabled(e.target.checked);
                       recalcTimeseries();
                     }}

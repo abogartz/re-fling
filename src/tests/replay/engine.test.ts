@@ -279,6 +279,33 @@ describe("Replay Engine", () => {
 
 
 
+  test("timeseries: 2 rows 1s apart with 1s override → 2 bins at 0.0s and 1.0s", () => {
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
+    ];
+
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 1000, // 1 second override
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(data, config);
+    const state = engine.getState();
+
+    // Should have exactly 2 bins
+    expect(state.timeseries.timestamps).toHaveLength(2);
+    expect(state.timeseries.rpsValues).toHaveLength(2);
+    // First bin at t=0, second at t=1000ms
+    expect(state.timeseries.timestamps[0]).toBe(0);
+    expect(state.timeseries.timestamps[1]).toBe(1000);
+    // Each bin has 1 request
+    expect(state.timeseries.rpsValues[0]).toBe(1);
+    expect(state.timeseries.rpsValues[1]).toBe(1);
+  });
+
   test("should handle empty data set", () => {
     const config: ReplayConfig = {
       speed: 1.0,
@@ -357,6 +384,47 @@ describe("Replay Engine", () => {
     if (state.activeRows.length > 1) {
       expect(state.delayMs).toBeCloseTo(20000 / (state.activeRows.length - 1), 0);
     }
+  });
+
+  test("repeat exact boundary: 2 rows 1s apart, duration=2000ms → 3 rows (R1,R2,R1) not 4", () => {
+    // Reproduces bug where old trim loop never fired, producing 4 rows.
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
+    ];
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 2000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(data, config);
+    const state = engine.getState();
+
+    expect(state.activeRows.length).toBe(3); // R1, R2, R1
+    expect(state.delayMs).toBeCloseTo(1000, 0);
+  });
+
+  test("repeat: timeseries shows uniform RPS when data is repeated", () => {
+    // 2 rows 1s apart, duration=2000ms → R1@0, R2@1000, R1@2000
+    // Should show 1 RPS in each 1s bin (0-1s and 1-2s)
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
+    ];
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 2000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(data, config);
+    const state = engine.getState();
+
+    expect(state.timeseries.timestamps).toHaveLength(3); // bins at 0, 1000, 2000
+    expect(state.timeseries.rpsValues).toEqual([1, 1, 1]); // 1 RPS in each bin
   });
 
   test("exact fit: no repetition or cropping needed", () => {

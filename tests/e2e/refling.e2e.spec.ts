@@ -452,4 +452,223 @@ test.describe("ReFling E2E Tests", () => {
     // Screenshot: Timeseries after speed change
     await page.screenshot({ path: `${SCREENSHOT_DIR}/04-speed-change.png`, fullPage: true });
   });
+
+  test("2s override on 1s-apart CSV shows 3 bins and completes in ~2s", async ({ page }) => {
+    const filePath = "examples/test_1s_interval.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Enable duration override and set to 2 seconds
+    const checkbox = page.locator('input[type="checkbox"]');
+    await checkbox.check();
+
+    const durationNumberInput = page.locator('input[type="number"]').first();
+    await durationNumberInput.fill("2");
+
+    // Ensure unit is "seconds"
+    const configSection = page.locator('h2:has-text("Replay Configuration")').locator('..');
+    const unitSelect = configSection.locator('select');
+    const unitValue = await unitSelect.inputValue();
+    if (unitValue !== "seconds") {
+      await unitSelect.selectOption("seconds");
+    }
+
+    // Wait for timeseries to update
+    await page.waitForTimeout(500);
+
+    // Verify chart shows 3 bins (0s, 1s, 2s)
+    const chartData = await page.evaluate(() => {
+      const chart = window["__chartInstance"];
+      if (!chart || !chart.data) return null;
+      return {
+        labels: [...chart.data.labels],
+        datasets: chart.data.datasets.map((ds: any) => ({
+          label: ds.label,
+          data: [...ds.data],
+        })),
+      };
+    });
+
+    expect(chartData).not.toBeNull();
+    // Should have exactly 3 bins (t=0s, t=1s, t=2s)
+    expect(chartData!.labels.length).toBe(3);
+    expect(chartData!.labels[0]).toBe("0.0s");
+    expect(chartData!.labels[1]).toBe("1.0s");
+    expect(chartData!.labels[2]).toBe("2.0s");
+
+    // Click Start and verify replay completes in ~2 seconds
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await startBtn.click();
+
+    // Wait for completion
+    await page.waitForFunction(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState()?.status === 'completed';
+    }, { timeout: 5000 });
+
+    const finalState = await page.evaluate(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState();
+    });
+
+    expect(finalState.status).toBe("completed");
+    // Should have completed in approximately 2 seconds (allow some margin)
+    expect(finalState.elapsed).toBeGreaterThanOrEqual(1800);
+    expect(finalState.elapsed).toBeLessThanOrEqual(2500);
+  });
+
+  test("2s override progress meter shows correct totalRequests (not fittingRows)", async ({ page }) => {
+    // CSV has 2 rows spanning 1s. Override to 2s → engine repeats data → activeRows > 2
+    // Progress should show completed/activeRows, not completed/fittingRows
+    const filePath = "examples/test_1s_interval.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Enable duration override and set to 2 seconds
+    const checkbox = page.locator('input[type="checkbox"]');
+    await checkbox.check();
+    const durationNumberInput = page.locator('input[type="number"]').first();
+    await durationNumberInput.fill("2");
+
+    // Click Start
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await startBtn.click();
+
+    // Wait for completion
+    await page.waitForFunction(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState()?.status === 'completed';
+    }, { timeout: 5000 });
+
+    // Read final state from engine
+    const finalState = await page.evaluate(() => {
+      const engine = (window as any).__engineRef;
+      return {
+        status: engine?.getState()?.status,
+        completedRequests: engine?.getState()?.completedRequests,
+        totalRequests: engine?.getState()?.totalRequests,
+        activeRowsLength: engine?.getState()?.activeRows?.length,
+      };
+    });
+
+    expect(finalState.status).toBe("completed");
+    // completed should equal totalRequests
+    expect(finalState.completedRequests).toBe(finalState.totalRequests);
+    // totalRequests should equal activeRows length (engine's source of truth)
+    expect(finalState.totalRequests).toBe(finalState.activeRowsLength);
+  });
+
+  test("duration override updates totalRequests before Start is pressed", async ({ page }) => {
+    const filePath = "examples/test_1s_interval.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Enable duration override and set to 2 seconds
+    const checkbox = page.locator('input[type="checkbox"]');
+    await checkbox.check();
+    const durationNumberInput = page.locator('input[type="number"]').first();
+    await durationNumberInput.fill("2");
+
+    // Wait for UI to update (but don't click Start)
+    await page.waitForTimeout(500);
+
+    // Read the expected requests count from the UI
+    const expectedText = await page.evaluate(() => {
+      const elements = document.querySelectorAll('p');
+      for (const el of Array.from(elements)) {
+        const text = el.textContent?.trim();
+        if (text && /^Expected:\s*\d+\s*requests$/.test(text)) {
+          return text;
+        }
+      }
+      return null;
+    });
+
+    // Should show "Expected: 4 requests"
+    expect(expectedText).toBe("Expected: 4 requests");
+  });
+
+  test("1s override on 1s-apart CSV shows 2 bins with correct labels", async ({ page }) => {
+    // CSV has exactly 2 rows 1 second apart. Override duration to 1s → expect 2 bins.
+    const filePath = "examples/test_1s_interval.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Wait for config section
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Enable duration override checkbox
+    const checkbox = page.locator('input[type="checkbox"]');
+    await checkbox.check();
+
+    // Set duration value to 1 second
+    const durationNumberInput = page.locator('input[type="number"]').first();
+    await durationNumberInput.fill("1");
+
+    // Ensure unit is "seconds"
+    const configSection = page.locator('h2:has-text("Replay Configuration")').locator('..');
+    const unitSelect = configSection.locator('select');
+    const unitValue = await unitSelect.inputValue();
+    if (unitValue !== "seconds") {
+      await unitSelect.selectOption("seconds");
+    }
+
+    // Wait for timeseries to update
+    await page.waitForTimeout(500);
+
+    // Get chart data
+    const chartData = await page.evaluate(() => {
+      const chart = window["__chartInstance"];
+      if (!chart || !chart.data) return null;
+      return {
+        labels: [...chart.data.labels],
+        datasets: chart.data.datasets.map((ds: any) => ({
+          label: ds.label,
+          data: [...ds.data],
+        })),
+      };
+    });
+
+    expect(chartData).not.toBeNull();
+    // Should have exactly 2 bins (t=0s and t=1s)
+    expect(chartData!.labels.length).toBe(2);
+    // Labels should be "0.0s" and "1.0s"
+    expect(chartData!.labels[0]).toBe("0.0s");
+    expect(chartData!.labels[1]).toBe("1.0s");
+    // Both bins should have 1 request each
+    expect(chartData!.datasets[0].data[0]).toBe(1);
+    expect(chartData!.datasets[0].data[1]).toBe(1);
+
+    // Screenshot: timeseries with 2 bins
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/05-one-second-override.png`, fullPage: true });
+  });
+
+  test("should have logs button in upper right corner", async ({ page }) => {
+    // Logs button should be visible
+    const logsButton = page.locator("button[title='View logs']");
+    await expect(logsButton).toBeVisible();
+    
+    // Button should be positioned in the upper right (fixed positioning)
+    const box = await logsButton.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThan(0);
+    expect(box!.y).toBeGreaterThan(0);
+    
+    // Screenshot: logs button visible
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/06-logs-button.png`, fullPage: true });
+  });
 });

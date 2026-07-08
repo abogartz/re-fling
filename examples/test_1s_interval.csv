@@ -1,0 +1,3 @@
+datetime,url
+2024-01-01T10:00:00Z,http://localhost:3001/v1/models?uid=abc123def456
+2024-01-01T10:00:01Z,http://localhost:3001/v1/models?uid=abc123def457

@@ -12,6 +12,7 @@ ReFling is a an application designed to replay historical traffic patterns exact
 ### Core Functionality
 - [ ] Implement CSV parser for timestamped requests (datetime, URL)
 - [ ] Create exact timing replay engine with min/max bounds (1ms min, 10s max)
+- [ ] Preserve exact inter-row timing gaps when repeating data to fill duration (no uniform spacing)
 - [ ] Add playback speed control (slider)
 - [ ] Build URL filtering capability
 
@@ -32,6 +33,7 @@ ReFling is a an application designed to replay historical traffic patterns exact
 ### Advanced Features
 - [ ] Iteration control (run Y times)
 - [ ] Total duration control (run for X duration and stop or extend (repeat) regardless of entries)
+- [ ] When repeating data to fill duration: preserve original inter-row timing gaps, place cycles back-to-back
 - [ ] Cancel button for stopping replays
 - [ ] Base URL prefix functionality for URL path reconstruction
 
@@ -121,6 +123,10 @@ ReFling is a an application designed to replay historical traffic patterns exact
 
 ## Limitations & Notes
 **Timing Accuracy:** While ReFling attempts to maintain exact timing patterns, network latency variations between original and replay environments may affect race condition reproduction. This tool is intended as a best-effort recreation of traffic patterns for debugging purposes.
+
+**Repeating Behavior:** When duration exceeds CSV span, data repeats in cycles preserving original inter-row gaps. Cycles are placed back-to-back with no gap between them. This preserves natural traffic spikes/valleys unlike uniform-spacing tools (k6, etc.).
+
+**Performance Considerations:** Preview histograms use sampling to maintain GUI responsiveness across large datasets. Very large files (exceeding 1GB) will be rejected to prevent memory issues.
 
 **Performance Considerations:** Preview histograms use sampling to maintain GUI responsiveness across large datasets. Very large files (exceeding 1GB) will be rejected to prevent memory issues.
 
