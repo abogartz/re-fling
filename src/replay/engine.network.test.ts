@@ -6,7 +6,7 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach, beforeAll } from "bun:test";
-import { ReplayEngine, ReplayConfig } from "../../src/replay/engine";
+import { ReplayEngine, ReplayConfig } from "../replay/engine";
 
 // ------------------------------ Mock Server ---------------------------------
 const mockResponse: Record<string, [number, string]> = {

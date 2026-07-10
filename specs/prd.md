@@ -146,7 +146,8 @@ ReFling is a an application designed to replay historical traffic patterns exact
 - **Feature components** (`src/features/*/*.tsx`) — dumb presentational components
 - **Engine** (`src/replay/engine.ts`) — unchanged ReplayEngine class (imperative, callback-based)
 - **Utils** (`src/utils/`) — pure functions with no React/store dependencies
-- Tests in `tests/` directory with matching file names (`foo.test.ts`)
+- Tests as siblings of source files: `src/foo.test.ts` for `src/foo.ts`
+- E2E tests in top-level `e2e/` folder (Playwright): `e2e/refling.e2e.spec.ts`
 - App.tsx: ~150 lines (thin orchestrator composing store + feature components)
 - Each feature hook/component under 80 lines
 - DRY: `calculateActualDuration` defined once in `utils/duration.ts`, imported everywhere
