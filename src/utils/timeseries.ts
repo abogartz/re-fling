@@ -81,17 +81,16 @@ export function recalcPreviewStats(
         new Date(data[0].datetime).getTime();
       if (maxTime > 0) {
         let trimmed = 0;
-        let elapsed = 0;
         for (let r = 0; r < repeatCount; r++) {
           for (const row of data) {
             const t =
               new Date(row.datetime).getTime() -
               new Date(data[0].datetime).getTime();
-            if (elapsed + maxTime > effectiveDuration && trimmed > 0) {
+            const absTime = r * maxTime + t;
+            if (absTime > effectiveDuration) {
               break;
             }
             trimmed++;
-            elapsed = t;
           }
         }
         previewTotalRequests = trimmed;

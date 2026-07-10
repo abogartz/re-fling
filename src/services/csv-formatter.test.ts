@@ -76,21 +76,18 @@ describe("formatRequestsForLog", () => {
     expect(parsed).toHaveLength(2);
   });
 
-  test("applies speed to timing calculations", () => {
+  test("preserves original timing gaps between rows", () => {
     const data = [
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "/api/a" },
       { datetime: new Date("2024-01-01T10:00:10Z"), url: "/api/b" },
     ];
-    // speed=2 → playback is 2x faster
-    const result = formatRequestsForLog(data, 2, 5000);
+    const result = formatRequestsForLog(data, 1, 8000);
 
     const parsed = JSON.parse(result.replace("requests: ", ""));
     expect(parsed).toHaveLength(2);
-    // With speed=2 and csvDuration=10s, effectiveDuration=5s
-    // Row 0: playbackTime = 0 * 5/10 = 0 → 0.00s
-    // Row 1: playbackTime = 10000 * 5/10 = 5000 → 5.00s
+    // Original gap preserved: 10s between rows
     expect(parsed[0].timing).toBe("0.00s");
-    expect(parsed[1].timing).toBe("5.00s");
+    expect(parsed[1].timing).toBe("10.00s");
   });
 
   test("output is valid JSON-parseable format", () => {

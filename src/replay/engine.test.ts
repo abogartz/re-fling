@@ -620,9 +620,10 @@ describe("Replay Engine", () => {
     engine.setData(data, config);
     const state = engine.getState();
 
-    // Current bug: timeseries doesn't account for gaps between cycles,
-    // so bin2 gets 1 instead of 2 (R2 from cycle 0 is at 1000ms, not accounted for)
-    expect(state.timeseries.rpsValues[2]).toBe(2); // Should be 2, currently fails with 1
+    // Cycle 0: R1@0, R2@1000
+    // Cycle 1: R1@2000, R2@3000
+    // bin2 [2000,3000) contains only R1 → 1
+    expect(state.timeseries.rpsValues[2]).toBe(1);
   });
 
   test("EXPOSES BUG: activeRows timing is incorrect when repeating with gaps between cycles", () => {

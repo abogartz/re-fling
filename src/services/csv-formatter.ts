@@ -21,14 +21,16 @@ export function formatRequestsForLog(
   const requests: Array<{ url: string; timing: string }> = [];
   const firstTime = new Date(data[0].datetime).getTime();
 
+  // Average inter-row gap from original CSV (used as pause between cycles)
+  const avgGap = data.length > 1 ? csvDuration / (data.length - 1) : 0;
+  const cycleInterval = csvDuration + avgGap;
+
   for (let cycle = 0; cycle < repeatCount; cycle++) {
     for (const row of data) {
       const csvTime = new Date(row.datetime).getTime();
       const relativeTime = csvTime - firstTime;
-      const playbackTime = csvDuration > 0
-        ? (relativeTime * effectiveDuration) / csvDuration
-        : 0;
-      const absoluteTime = playbackTime + cycle * csvDuration;
+      const playbackTime = relativeTime;
+      const absoluteTime = playbackTime + cycle * cycleInterval;
 
       requests.push({
         url: row.url,
