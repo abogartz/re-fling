@@ -1,69 +1,50 @@
-import { useState, useRef, useCallback } from "react";
-import { DurationUnit, getEffectiveDurationMs } from "../../utils/duration";
+import { useCallback } from "react";
+import { getEffectiveDurationMs, type DurationUnit } from "../../utils/duration";
+import { useAppStore } from "../../store/useAppStore";
 
 export interface UseDurationReturn {
   speed: number;
   durationEnabled: boolean;
   durationValue: number;
   durationUnit: DurationUnit;
-  speedRef: React.MutableRefObject<number>;
-  durationValueRef: React.MutableRefObject<number>;
-  durationUnitRef: React.MutableRefObject<DurationUnit>;
-  durationEnabledRef: React.MutableRefObject<boolean>;
-  setDurationEnabled: (v: boolean) => void;
-  handleSpeedChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  handleDurationValueChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  handleDurationUnitChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  setSpeed: (speed: number) => void;
+  setDurationEnabled: (enabled: boolean) => void;
+  setDurationValue: (value: number) => void;
+  setDurationUnit: (unit: DurationUnit) => void;
 }
 
 export function useDuration(): UseDurationReturn {
-  const [speed, setSpeed] = useState(1.0);
-  const [durationEnabled, setDurationEnabled] = useState(false);
-  const [durationValue, setDurationValue] = useState(100);
-  const [durationUnit, setDurationUnit] = useState<DurationUnit>("seconds");
+  const speed = useAppStore((s) => s.speed);
+  const durationEnabled = useAppStore((s) => s.durationEnabled);
+  const durationValue = useAppStore((s) => s.durationValue);
+  const durationUnit = useAppStore((s) => s.durationUnit);
 
-  const speedRef = useRef(speed);
-  speedRef.current = speed;
-
-  const durationValueRef = useRef(durationValue);
-  durationValueRef.current = durationValue;
-
-  const durationUnitRef = useRef(durationUnit);
-  durationUnitRef.current = durationUnit;
-
-  const durationEnabledRef = useRef(durationEnabled);
-  durationEnabledRef.current = durationEnabled;
-
-  const handleSpeedChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const newSpeed = parseFloat(e.target.value) || 1;
-    setSpeed(newSpeed);
-  }, []);
-
-  const handleDurationValueChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseInt(e.target.value, 10);
-    if (isNaN(val) || val < 0) { return; }
-    durationValueRef.current = val;
-    setDurationValue(val);
-  }, []);
-
-  const handleDurationUnitChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    durationUnitRef.current = e.target.value as DurationUnit;
-    setDurationUnit(e.target.value as DurationUnit);
-  }, []);
+  const setSpeed = useCallback(
+    (speed: number) => useAppStore.getState().setSpeed(speed),
+    [],
+  );
+  const setDurationEnabled = useCallback(
+    (enabled: boolean) => useAppStore.getState().setDurationEnabled(enabled),
+    [],
+  );
+  const setDurationValue = useCallback(
+    (value: number) => useAppStore.getState().setDurationValue(value),
+    [],
+  );
+  const setDurationUnit = useCallback(
+    (unit: DurationUnit) => useAppStore.getState().setDurationUnit(unit),
+    [],
+  );
 
   return {
     speed,
     durationEnabled,
     durationValue,
     durationUnit,
-    speedRef,
-    durationValueRef,
-    durationUnitRef,
-    durationEnabledRef,
+    setSpeed,
     setDurationEnabled,
-    handleSpeedChange,
-    handleDurationValueChange,
-    handleDurationUnitChange,
+    setDurationValue,
+    setDurationUnit,
   };
 }
 

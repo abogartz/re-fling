@@ -1,4 +1,5 @@
 import { ParsedCSV } from "../../csv/parser";
+import { Card } from "../../components/ui/Card";
 
 interface ColumnMappingProps {
   rawParsed: ParsedCSV | null;
@@ -15,11 +16,12 @@ export function ColumnMapping({
   onDatetimeChange,
   hasParsedData,
 }: ColumnMappingProps) {
-  if (!rawParsed) { return null; }
+  if (!rawParsed) {
+    return null;
+  }
 
   return (
-    <div className="bg-[#252525] rounded-lg border border-gray-700 p-2 mt-2" data-testid="column-mapping">
-      <h2 className="text-xs font-semibold mb-1 text-white">Column Mapping</h2>
+    <Card title="Column Mapping" className="mt-2" data-testid="column-mapping">
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <label className="text-[10px] font-medium text-gray-300 w-16">url</label>
@@ -57,6 +59,6 @@ export function ColumnMapping({
           Select both columns above to enable Start.
         </p>
       )}
-    </div>
+    </Card>
   );
 }

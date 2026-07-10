@@ -1,5 +1,6 @@
 import React from "react";
-import { DurationUnit } from "../../utils/duration";
+import { Card } from "../../components/ui/Card";
+import { DurationUnit, formatDuration } from "../../utils/duration";
 
 interface DurationControlsProps {
   speed: number;
@@ -25,8 +26,7 @@ export function DurationControls({
   onDurationUnitChange,
 }: DurationControlsProps) {
   return (
-    <div className="bg-[#252525] rounded-lg border border-gray-700 p-2 mb-2">
-      <h2 className="text-xs font-semibold mb-1 text-white">Replay Configuration</h2>
+    <Card title="Replay Configuration">
       <div className="flex gap-2 items-center">
         <div className="flex-1">
           <label className="block text-[10px] font-medium text-gray-300 mb-0.5">
@@ -79,20 +79,6 @@ export function DurationControls({
           CSV span: {formatDuration(actualDurationMs)} | Speed: {speed.toFixed(1)}x
         </p>
       )}
-    </div>
+    </Card>
   );
-}
-
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
 }

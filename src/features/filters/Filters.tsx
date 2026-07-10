@@ -1,3 +1,5 @@
+import { Card } from "../../components/ui/Card";
+
 interface FiltersProps {
   baseUrl: string;
   filterPatterns: string;
@@ -12,8 +14,7 @@ export function Filters({
   onFilterPatternsChange,
 }: FiltersProps) {
   return (
-    <div className="bg-[#252525] rounded-lg border border-gray-700 p-2">
-      <h2 className="text-xs font-semibold mb-1 text-white">Filters</h2>
+    <Card title="Filters">
       <div className="flex gap-1.5">
         <input
           type="text"
@@ -30,6 +31,6 @@ export function Filters({
           className="flex-1 border border-gray-600 bg-[#1a1a1a] text-white rounded px-1 py-0.5 text-xs"
         />
       </div>
-    </div>
+    </Card>
   );
 }

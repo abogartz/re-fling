@@ -1,6 +1,6 @@
 interface LogsPanelProps {
   visible: boolean;
-  logs: string[];
+  entries: string[];
   logCount: number;
   onToggle: () => void;
   onClear: () => void;
@@ -8,7 +8,7 @@ interface LogsPanelProps {
 
 export function LogsPanel({
   visible,
-  logs,
+  entries,
   logCount,
   onToggle,
   onClear,
@@ -35,10 +35,10 @@ export function LogsPanel({
             </button>
           </div>
           <div className="max-h-48 overflow-y-auto font-mono text-[10px] text-gray-400 space-y-0.5">
-            {logs.length === 0 ? (
+            {entries.length === 0 ? (
               <p className="text-gray-600 italic">No logs yet.</p>
             ) : (
-              logs.map((line, i) => (
+              entries.map((line, i) => (
                 <div key={i} className="break-all whitespace-pre-wrap">{line}</div>
               ))
             )}

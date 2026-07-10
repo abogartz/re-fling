@@ -1,4 +1,5 @@
 import { CSVRow } from "../csv/parser";
+import { calculateActualDuration } from "./duration";
 
 export interface TimeseriesResult {
   timestamps: number[];
@@ -48,9 +49,4 @@ export function calculateExpectedTimeseries(
   return { timestamps, rpsValues };
 }
 
-function calculateActualDuration(data: CSVRow[]): number {
-  if (data.length < 2) { return 0; }
-  const firstTime = new Date(data[0].datetime).getTime();
-  const lastTime = new Date(data[data.length - 1].datetime).getTime();
-  return Math.max(0, lastTime - firstTime);
-}
+

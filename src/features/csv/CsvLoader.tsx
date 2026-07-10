@@ -1,4 +1,5 @@
 import React from "react";
+import { Card } from "../../components/ui/Card";
 
 interface CsvLoaderProps {
   fileInputRef: React.RefObject<HTMLInputElement>;
@@ -45,8 +46,7 @@ export function CsvLoader({
   completedRequests,
 }: CsvLoaderProps) {
   return (
-    <div className="bg-[#252525] rounded-lg border border-gray-700 p-3 mb-2">
-      <h2 className="text-sm font-semibold mb-1.5 text-white">Load CSV Data</h2>
+    <Card title="Load CSV Data">
       <div className="flex gap-2 items-center">
         <input
           ref={fileInputRef}
@@ -100,6 +100,6 @@ export function CsvLoader({
           </p>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

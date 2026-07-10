@@ -1,195 +1,121 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ReplayEngine,
-  type ReplayConfig,
-  type ReplayState,
-} from "../replay/engine";
+import React, { useEffect } from "react";
+import { useAppStore } from "../store/useAppStore";
+import { getEffectiveDurationMs, calculateActualDuration } from "../utils/duration";
+import { calculateExpectedTimeseries } from "../utils/timeseries";
+import { addLog } from "../bun/logs";
+import { formatRequestsForLog } from "../services/csv-formatter";
 import { useCsvLoad } from "../features/csv/useCsvLoad";
 import { CsvLoader } from "../features/csv/CsvLoader";
 import { DurationControls } from "../features/duration/DurationControls";
-import {
-  useDuration,
-  type UseDurationReturn,
-} from "../features/duration/useDuration";
+
 import { Filters } from "../features/filters/Filters";
 import { useFilters } from "../features/filters/useFilters";
 import { ColumnMapping } from "../features/columns/ColumnMapping";
 import { LogsPanel } from "../features/logs/LogsPanel";
 import { useLogs } from "../features/logs/useLogs";
 import { TimeseriesChart } from "./TimeseriesChart";
-import { calculateExpectedTimeseries, TimeseriesResult } from "../utils/timeseries";
-import { calculateActualDuration, getEffectiveDurationMs } from "../utils/duration";
-import { addLog } from "../bun/logs";
-
-function formatRequestsForLog(
-  data: Array<{ url: string; datetime: Date }>,
-  _speed: number,
-  durationMs: number,
-): string {
-  if (data.length === 0) { return 'requests: []'; }
-
-  const csvDuration = calculateActualDuration(data);
-  const effectiveDuration = durationMs > 0 ? durationMs : csvDuration;
-  const repeatCount = csvDuration > 0 ? Math.ceil(effectiveDuration / csvDuration) : 1;
-
-  const requests: Array<{ url: string; timing: string }> = [];
-  const firstTime = new Date(data[0].datetime).getTime();
-
-  for (let cycle = 0; cycle < repeatCount; cycle++) {
-    for (const row of data) {
-      const csvTime = new Date(row.datetime).getTime();
-      const relativeTime = csvTime - firstTime;
-      const playbackTime = csvDuration > 0
-        ? (relativeTime * effectiveDuration) / csvDuration
-        : 0;
-      const absoluteTime = playbackTime + cycle * csvDuration;
-
-      requests.push({
-        url: row.url,
-        timing: `${(absoluteTime / 1000).toFixed(2)}s`,
-      });
-    }
-  }
-
-  return `requests: ${JSON.stringify(requests)}`;
-}
 
 function App() {
   const csv = useCsvLoad();
-  const dur = useDuration();
   const filt = useFilters();
   const logs = useLogs();
 
-  const engineRef = useRef<ReplayEngine | null>(null);
-  const [replayState, setReplayState] = useState<ReplayState>({
-    status: "idle",
-    progress: 0,
-    totalRequests: 0,
-    completedRequests: 0,
-    errors: 0,
-    elapsed: 0,
-    config: { speed: 1.0, duration: 0, baseUrl: "", filterPatterns: [] },
-    activeRows: [],
-    delayMs: 0,
-    filteredData: [],
-    timeseries: { timestamps: [], rpsValues: [] },
-    actualDurationMs: 0,
-  });
+  const startReplay = useAppStore((s) => s.startReplay);
+  const stopReplay = useAppStore((s) => s.stopReplay);
+  const status = useAppStore((s) => s.status);
+  const progress = useAppStore((s) => s.progress);
+  const totalRequests = useAppStore((s) => s.totalRequests);
+  const completedRequests = useAppStore((s) => s.completedRequests);
+  const actualDurationMs = useAppStore((s) => s.actualDurationMs);
+  const timeseries = useAppStore((s) => s.timeseries);
+  const speed = useAppStore((s) => s.speed);
+  const durationEnabled = useAppStore((s) => s.durationEnabled);
+  const durationValue = useAppStore((s) => s.durationValue);
+  const durationUnit = useAppStore((s) => s.durationUnit);
+  const setPreviewStats = useAppStore((s) => s.setPreviewStats);
 
-  const startReplay = useCallback(() => {
-    if (!csv.parsedData) { return; }
-    const engine = new ReplayEngine();
-    engineRef.current = engine;
-    (window as unknown as Record<string, unknown>).__engineRef = engine;
-
-    const effectiveDurationMs = getEffectiveDurationMs(
-      dur.durationEnabled, dur.durationValue, dur.durationUnit,
-    );
-    const config: ReplayConfig = {
-      speed: dur.speed,
-      duration: effectiveDurationMs > 0
-        ? effectiveDurationMs
-        : calculateActualDuration(csv.parsedData.data),
-      baseUrl: filt.baseUrl,
-      filterPatterns: filt.filterPatterns
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    };
-
-    engine.setProgressCallback((state) => {
-      setReplayState(state);
-    });
-
-    engine.setData(
-      csv.parsedData.data.map((d) => ({ datetime: d.datetime, url: d.url })),
-      config,
-    );
-
-    engine.start();
-  }, [csv.parsedData, dur.speed, filt.baseUrl, filt.filterPatterns,
-    dur.durationEnabled, dur.durationValue, dur.durationUnit]);
-
-  const stopReplay = useCallback(() => {
-    engineRef.current?.cancel();
-  }, []);
-
-  // Recalculate timeseries when parsed data changes (column mapping update)
+  // Recalculate timeseries when parsed data changes
   useEffect(() => {
-    if (!csv.parsedData) { return; }
-    const result = recalcTimeseries(csv.parsedData, dur);
-    setReplayState((prev) => ({ ...prev, ...result }));
+    if (!csv.parsedData) {
+      return;
+    }
+    const state = useAppStore.getState();
+    const result = recalcTimeseries(csv.parsedData, state);
+    setPreviewStats(result.timeseries, result.totalRequests);
 
     if (csv.parsedData.data.length > 0) {
       const effectiveDuration = getEffectiveDurationMs(
-        dur.durationEnabledRef.current, dur.durationValueRef.current, dur.durationUnitRef.current,
+        state.durationEnabled, state.durationValue, state.durationUnit,
       ) || calculateActualDuration(csv.parsedData.data);
-      addLog(formatRequestsForLog(csv.parsedData.data, dur.speedRef.current, effectiveDuration));
+      addLog(formatRequestsForLog(csv.parsedData.data, state.speed, effectiveDuration));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [csv.parsedData]);
 
-  const handleSpeedChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    dur.handleSpeedChange(e);
+  const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newSpeed = parseFloat(e.target.value) || 1;
+    useAppStore.getState().setSpeed(newSpeed);
 
     if (csv.parsedData && csv.parsedData.data.length > 0) {
-      const newSpeed = parseFloat(e.target.value) || 1;
+      const state = useAppStore.getState();
       const effectiveDuration = getEffectiveDurationMs(
-        dur.durationEnabledRef.current, dur.durationValueRef.current, dur.durationUnitRef.current,
+        state.durationEnabled, state.durationValue, state.durationUnit,
       ) || calculateActualDuration(csv.parsedData.data);
       addLog(formatRequestsForLog(csv.parsedData.data, newSpeed, effectiveDuration));
     }
 
     if (csv.parsedData) {
-      const result = recalcTimeseries(csv.parsedData, dur);
-      setReplayState((prev) => ({ ...prev, ...result }));
+      const state = useAppStore.getState();
+      const result = recalcTimeseries(csv.parsedData, state);
+      setPreviewStats(result.timeseries, result.totalRequests);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [csv.parsedData]);
+  };
 
-  const handleDurationValueChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    dur.handleDurationValueChange(e);
+  const handleDurationValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value, 10);
+    if (!isNaN(val) && val >= 0) {
+      useAppStore.getState().setDurationValue(val);
+    }
 
-    if (csv.parsedData && csv.parsedData.data.length > 0 && dur.durationEnabledRef.current) {
+    const state = useAppStore.getState();
+    if (csv.parsedData && csv.parsedData.data.length > 0 && state.durationEnabled) {
       const effectiveDuration = getEffectiveDurationMs(
-        dur.durationEnabledRef.current, dur.durationValueRef.current, dur.durationUnitRef.current,
+        state.durationEnabled, state.durationValue, state.durationUnit,
       );
-      addLog(formatRequestsForLog(csv.parsedData.data, dur.speedRef.current, effectiveDuration));
+      addLog(formatRequestsForLog(csv.parsedData.data, state.speed, effectiveDuration));
     }
 
     if (csv.parsedData) {
-      const result = recalcTimeseries(csv.parsedData, dur);
-      setReplayState((prev) => ({ ...prev, ...result }));
+      const result = recalcTimeseries(csv.parsedData, state);
+      setPreviewStats(result.timeseries, result.totalRequests);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [csv.parsedData]);
+  };
 
-  const handleDurationUnitChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    dur.handleDurationUnitChange(e);
+  const handleDurationUnitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    useAppStore.getState().setDurationUnit(e.target.value as "seconds" | "minutes" | "hours");
 
-    if (csv.parsedData && csv.parsedData.data.length > 0 && dur.durationEnabledRef.current) {
+    const state = useAppStore.getState();
+    if (csv.parsedData && csv.parsedData.data.length > 0 && state.durationEnabled) {
       const effectiveDuration = getEffectiveDurationMs(
-        dur.durationEnabledRef.current, dur.durationValueRef.current, dur.durationUnitRef.current,
+        state.durationEnabled, state.durationValue, state.durationUnit,
       );
-      addLog(formatRequestsForLog(csv.parsedData.data, dur.speedRef.current, effectiveDuration));
+      addLog(formatRequestsForLog(csv.parsedData.data, state.speed, effectiveDuration));
     }
 
     if (csv.parsedData) {
-      const result = recalcTimeseries(csv.parsedData, dur);
-      setReplayState((prev) => ({ ...prev, ...result }));
+      const result = recalcTimeseries(csv.parsedData, state);
+      setPreviewStats(result.timeseries, result.totalRequests);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [csv.parsedData]);
+  };
 
-  const handleDurationEnabledChange = useCallback((checked: boolean) => {
-    dur.durationEnabledRef.current = checked;
-    dur.setDurationEnabled(checked);
+  const handleDurationEnabledChange = (checked: boolean) => {
+    useAppStore.getState().setDurationEnabled(checked);
     if (csv.parsedData) {
-      const result = recalcTimeseries(csv.parsedData, dur);
-      setReplayState((prev) => ({ ...prev, ...result }));
+      const state = useAppStore.getState();
+      const result = recalcTimeseries(csv.parsedData, state);
+      setPreviewStats(result.timeseries, result.totalRequests);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [csv.parsedData]);
+  };
 
   return (
     <div className="min-h-screen bg-[#1a1a1a] p-2">
@@ -201,43 +127,65 @@ function App() {
             Replay historical traffic patterns exactly as they occurred.
           </p>
         </div>
-        <LogsPanel
-          visible={logs.logsVisible}
-          logs={logs.logs}
-          logCount={logs.logs.length}
-          onToggle={logs.toggleLogs}
-          onClear={logs.handleClearLogs}
-        />
       </div>
+
+      {/* Logs Toggle Button */}
+      <button
+        onClick={logs.toggleVisible}
+        data-testid="logs-toggle-btn"
+        className="bg-[#252525] border border-gray-700 rounded-lg px-3 py-1.5 hover:bg-[#333] transition-colors text-xs text-gray-300 mb-2"
+      >
+        {logs.visible ? "Hide Logs" : "Show Logs"} ({logs.entries.length})
+      </button>
 
       <div className="max-w-4xl mx-auto">
         {/* CSV Loader */}
         <CsvLoader
           fileInputRef={csv.fileInputRef}
           onFileLoad={csv.handleFileLoad}
-          onStart={startReplay}
+          onStart={() => {
+            if (!csv.parsedData) {
+              return;
+            }
+            const effectiveDurationMs = getEffectiveDurationMs(
+              durationEnabled, durationValue, durationUnit,
+            );
+            const config = {
+              speed: speed,
+              duration: effectiveDurationMs > 0 ? effectiveDurationMs : calculateActualDuration(csv.parsedData.data),
+              baseUrl: filt.baseUrl,
+              filterPatterns: filt.filterPatterns
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean),
+            };
+            startReplay(
+              csv.parsedData.data.map((d) => ({ datetime: d.datetime, url: d.url })),
+              config,
+            );
+          }}
           onStop={stopReplay}
-          isRunning={replayState.status === "running"}
+          isRunning={status === "running"}
           hasParsedData={!!csv.parsedData}
           columnMapping={csv.columnMapping}
           error={csv.error}
           dataCount={csv.parsedData?.data.length ?? 0}
-          totalRequests={replayState.totalRequests}
-          durationEnabled={dur.durationEnabled}
-          replayStatus={replayState.status}
-          progress={replayState.progress}
-          completedRequests={replayState.completedRequests}
-          actualDurationMs={replayState.actualDurationMs}
-          speed={dur.speed}
+          totalRequests={totalRequests}
+          durationEnabled={durationEnabled}
+          replayStatus={status}
+          progress={progress}
+          completedRequests={completedRequests}
+          actualDurationMs={actualDurationMs}
+          speed={speed}
         />
 
         {/* Duration Controls */}
         <DurationControls
-          speed={dur.speed}
-          durationEnabled={dur.durationEnabled}
-          durationValue={dur.durationValue}
-          durationUnit={dur.durationUnit}
-          actualDurationMs={replayState.actualDurationMs}
+          speed={speed}
+          durationEnabled={durationEnabled}
+          durationValue={durationValue}
+          durationUnit={durationUnit}
+          actualDurationMs={actualDurationMs}
           onSpeedChange={handleSpeedChange}
           onDurationEnabledChange={handleDurationEnabledChange}
           onDurationValueChange={handleDurationValueChange}
@@ -247,11 +195,11 @@ function App() {
         {/* Timeseries Chart */}
         <div className="bg-[#252525] rounded-lg border border-gray-700 p-2 mb-2">
           <h2 className="text-xs font-semibold mb-0.5 text-white">Expected RPS</h2>
-          {replayState.timeseries.rpsValues.length > 0 ? (
+          {timeseries.rpsValues.length > 0 ? (
             <div className="h-24" style={{ marginBottom: "50px" }}>
               <TimeseriesChart
-                timestamps={replayState.timeseries.timestamps}
-                rpsValues={replayState.timeseries.rpsValues}
+                timestamps={timeseries.timestamps}
+                rpsValues={timeseries.rpsValues}
               />
             </div>
           ) : (
@@ -273,11 +221,20 @@ function App() {
         <ColumnMapping
           rawParsed={csv.rawParsed}
           columnMapping={csv.columnMapping}
-          onUrlChange={(val) => csv.setColumnMapping((prev) => ({ ...prev, url: val }))}
+          onUrlChange={(val) => csv.setColumnMapping({ ...csv.columnMapping, url: val })}
           onDatetimeChange={(val) =>
-            csv.setColumnMapping((prev) => ({ ...prev, datetime: val }))
+            csv.setColumnMapping({ ...csv.columnMapping, datetime: val })
           }
           hasParsedData={!!csv.parsedData}
+        />
+
+        {/* Logs Panel */}
+        <LogsPanel
+          visible={logs.visible}
+          entries={logs.entries}
+          logCount={logs.entries.length}
+          onToggle={logs.toggleVisible}
+          onClear={logs.handleClearLogs}
         />
       </div>
     </div>
@@ -288,15 +245,20 @@ function App() {
 
 function recalcTimeseries(
   parsedData: { data: Array<{ url: string; datetime: Date }> },
-  dur: UseDurationReturn,
-): Partial<ReplayState> {
+  state: {
+    speed: number;
+    durationEnabled: boolean;
+    durationValue: number;
+    durationUnit: "seconds" | "minutes" | "hours";
+  },
+): { timeseries: { timestamps: number[]; rpsValues: number[] }; totalRequests: number } {
   const csvDuration = calculateActualDuration(parsedData.data);
   const overrideMs = getEffectiveDurationMs(
-    dur.durationEnabledRef.current, dur.durationValueRef.current, dur.durationUnitRef.current,
+    state.durationEnabled, state.durationValue, state.durationUnit,
   );
   const effectiveDuration = overrideMs > 0 ? overrideMs : csvDuration;
-  const ts: TimeseriesResult = calculateExpectedTimeseries(
-    parsedData.data, effectiveDuration, dur.speedRef.current,
+  const ts = calculateExpectedTimeseries(
+    parsedData.data, effectiveDuration, state.speed,
   );
 
   let previewTotalRequests = parsedData.data.length;
@@ -315,7 +277,9 @@ function recalcTimeseries(
           for (const row of parsedData.data) {
             const t = new Date(row.datetime).getTime() -
                       new Date(parsedData.data[0].datetime).getTime();
-            if (elapsed + maxTime > effectiveDuration && trimmed > 0) { break; }
+            if (elapsed + maxTime > effectiveDuration && trimmed > 0) {
+              break;
+            }
             trimmed++;
             elapsed = t;
           }

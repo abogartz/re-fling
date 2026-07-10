@@ -659,8 +659,8 @@ test.describe("ReFling E2E Tests", () => {
   });
 
   test("should have logs toggle button in header", async ({ page }) => {
-    // Logs toggle button should be visible in header
-    const logsButton = page.locator("button[title='Toggle logs']");
+    // Logs toggle button should be visible
+    const logsButton = page.locator("[data-testid='logs-toggle-btn']");
     await expect(logsButton).toBeVisible();
 
     // Button text should show log count
@@ -675,7 +675,7 @@ test.describe("ReFling E2E Tests", () => {
     await page.waitForTimeout(500);
 
     // Click toggle to open logs panel
-    const logsButton = page.locator("button[title='Toggle logs']");
+    const logsButton = page.locator("[data-testid='logs-toggle-btn']");
     await logsButton.click();
 
     // Logs panel should be visible with testid
@@ -693,7 +693,7 @@ test.describe("ReFling E2E Tests", () => {
     // Wait for app to initialize
     await page.waitForTimeout(500);
 
-    const logsButton = page.locator("button[title='Toggle logs']");
+    const logsButton = page.locator("[data-testid='logs-toggle-btn']");
 
     // Open logs panel
     await logsButton.click();
@@ -723,7 +723,7 @@ test.describe("ReFling E2E Tests", () => {
     await page.waitForTimeout(500);
 
     // Toggle logs panel open
-    const logsButton = page.locator("button[title='Toggle logs']");
+    const logsButton = page.locator("[data-testid='logs-toggle-btn']");
     await logsButton.click();
 
     // Verify welcome message appears in inline logs panel

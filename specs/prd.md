@@ -131,17 +131,32 @@ ReFling is a an application designed to replay historical traffic patterns exact
 
 **Performance Considerations:** Preview histograms use sampling to maintain GUI responsiveness across large datasets. Very large files (exceeding 1GB) will be rejected to prevent memory issues.
 
-## Code Architecture (v0.2)
-- Feature-based folder structure: `src/features/{csv,replay,duration,filters,columns,logs}/`
-- Shared utilities: `src/utils/{duration,timeseries}.ts`
+## Code Architecture (v0.3 — Zustand + Services)
+- **State management:** Zustand store (`src/store/useAppStore.ts`) with slices per domain
+  - `csvSlice` — parsed data, column mapping, error state
+  - `durationSlice` — speed, duration override settings
+  - `filtersSlice` — base URL, filter patterns
+  - `logsSlice` — log entries, visibility toggle
+  - `replaySlice` — engine state, progress, timeseries preview
+- **Services layer** (`src/services/`) — single source of truth for business logic:
+  - `csv-formatter.ts` — `formatRequestsForLog`, `calculateActualDuration`
+- **Components** (`src/components/ui/`) — shared UI primitives:
+  - `Card.tsx` — consistent card wrapper (bg, border, padding)
+- **Feature hooks** (`src/features/*/useXxx.ts`) — thin wrappers around store selectors
+- **Feature components** (`src/features/*/*.tsx`) — dumb presentational components
+- **Engine** (`src/replay/engine.ts`) — unchanged ReplayEngine class (imperative, callback-based)
+- **Utils** (`src/utils/`) — pure functions with no React/store dependencies
 - Tests in `tests/` directory with matching file names (`foo.test.ts`)
-- App.tsx: ~200 lines (thin orchestrator), down from 700 lines
-- Each feature hook/component under 100 lines
+- App.tsx: ~150 lines (thin orchestrator composing store + feature components)
+- Each feature hook/component under 80 lines
+- DRY: `calculateActualDuration` defined once in `utils/duration.ts`, imported everywhere
+- DRY: `formatRequestsForLog` defined once in `services/csv-formatter.ts`
 
 ## Next Steps
-1. Add iteration control UI
-2. Implement CLI version for CI/CD
-3. Add memory monitoring dashboard
-4. Performance optimization for 100K+ request replays
+1. ~~Refactor to Zustand + services layer~~ (completed v0.3)
+2. Add iteration control UI
+3. Implement CLI version for CI/CD
+4. Add memory monitoring dashboard
+5. Performance optimization for 100K+ request replays
 
 ---
