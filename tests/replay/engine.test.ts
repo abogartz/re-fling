@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { ReplayEngine, ReplayConfig } from "../../replay/engine";
+import { ReplayEngine, ReplayConfig } from "../../src/replay/engine";
 
 describe("Replay Engine", () => {
   let engine: ReplayEngine;

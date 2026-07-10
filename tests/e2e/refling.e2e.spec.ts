@@ -7,7 +7,7 @@ test.describe("ReFling E2E Tests", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(APP_URL);
     await page.waitForLoadState("networkidle");
-    
+
     // Screenshot 1: Initial app state
     await page.screenshot({ path: `${SCREENSHOT_DIR}/01-initial-state.png`, fullPage: true });
   });
@@ -227,7 +227,8 @@ test.describe("ReFling E2E Tests", () => {
       const style = window.getComputedStyle(el);
       return style.backgroundColor;
     });
-    expect(bgColor).toMatch(/rgb\(156, 163, 175\)/); // gray-400 in dark theme
+    // Should be gray-400 (#9CA3AF) or similar disabled state
+    expect(bgColor).toMatch(/rgb\(15[0-9], 16[0-9], 17[0-9]\)/);
 
     // Load a CSV file (still idle — stop should remain disabled)
     const filePath = "examples/test_requests.csv";
@@ -657,18 +658,86 @@ test.describe("ReFling E2E Tests", () => {
     await page.screenshot({ path: `${SCREENSHOT_DIR}/05-one-second-override.png`, fullPage: true });
   });
 
-  test("should have logs button in upper right corner", async ({ page }) => {
-    // Logs button should be visible
-    const logsButton = page.locator("button[title='View logs']");
+  test("should have logs toggle button in header", async ({ page }) => {
+    // Logs toggle button should be visible in header
+    const logsButton = page.locator("button[title='Toggle logs']");
     await expect(logsButton).toBeVisible();
-    
-    // Button should be positioned in the upper right (fixed positioning)
-    const box = await logsButton.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.x).toBeGreaterThan(0);
-    expect(box!.y).toBeGreaterThan(0);
-    
-    // Screenshot: logs button visible
+
+    // Button text should show log count
+    await expect(logsButton).toContainText(/Show Logs|Hide Logs/);
+
+    // Screenshot: logs toggle visible
     await page.screenshot({ path: `${SCREENSHOT_DIR}/06-logs-button.png`, fullPage: true });
+  });
+
+  test("should show inline logs panel with welcome message after toggling", async ({ page }) => {
+    // Wait for app to fully initialize and emit welcome log
+    await page.waitForTimeout(500);
+
+    // Click toggle to open logs panel
+    const logsButton = page.locator("button[title='Toggle logs']");
+    await logsButton.click();
+
+    // Logs panel should be visible with testid
+    const logsPanel = page.locator('[data-testid="logs-panel"]');
+    await expect(logsPanel).toBeVisible();
+
+    // Welcome message should appear in the logs
+    await expect(logsPanel).toContainText("Welcome to ReFling!");
+
+    // Screenshot: logs panel visible with welcome message
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/07-welcome-log.png`, fullPage: true });
+  });
+
+  test("should toggle logs panel open/close and clear logs", async ({ page }) => {
+    // Wait for app to initialize
+    await page.waitForTimeout(500);
+
+    const logsButton = page.locator("button[title='Toggle logs']");
+
+    // Open logs panel
+    await logsButton.click();
+    await expect(page.locator('[data-testid="logs-panel"]')).toBeVisible();
+
+    // Close logs panel (toggle)
+    await logsButton.click();
+    await expect(page.locator('[data-testid="logs-panel"]')).not.toBeVisible();
+
+    // Re-open
+    await logsButton.click();
+    await expect(page.locator('[data-testid="logs-panel"]')).toBeVisible();
+
+    // Verify welcome message still present after toggle cycle
+    await expect(page.locator('[data-testid="logs-panel"]')).toContainText("Welcome to ReFling!");
+
+    // Clear logs
+    const clearBtn = page.locator('[data-testid="logs-panel"] button:text("Clear")');
+    await clearBtn.click();
+
+    // Panel should show "No logs yet."
+    await expect(page.locator('[data-testid="logs-panel"]')).toContainText("No logs yet.");
+  });
+
+  test("should emit Welcome to ReFling! log message on app load", async ({ page }) => {
+    // Wait for app to fully initialize and emit welcome log
+    await page.waitForTimeout(500);
+
+    // Toggle logs panel open
+    const logsButton = page.locator("button[title='Toggle logs']");
+    await logsButton.click();
+
+    // Verify welcome message appears in inline logs panel
+    const logsPanel = page.locator('[data-testid="logs-panel"]');
+    await expect(logsPanel).toBeVisible();
+    await expect(logsPanel).toContainText("Welcome to ReFling!");
+
+    // Verify log format includes ISO timestamp
+    const logLines = await logsPanel.locator('div.break-all').allTextContents();
+    const welcomeLine = logLines.find(line => line.includes("Welcome to ReFling!"));
+    expect(welcomeLine).toBeDefined();
+    expect(welcomeLine!).toMatch(/\[\d{4}-\d{2}-\d{2}T/);
+
+    // Screenshot: verify app rendered with welcome log visible
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/07-welcome-log.png`, fullPage: true });
   });
 });

@@ -22,13 +22,14 @@ ReFling is a an application designed to replay historical traffic patterns exact
 - [ ] Sample CSV generator for testing
 
 ### User Interface
-- [ ] Desktop GUI
-- [ ] Single screen layout (no scrolling)
-- [ ] Progress bar and clock display during replay
-- [ ] Real-time statistics dashboard (RPS, total requests)
-- [ ] Preview mode with timing histogram visualization as line chart (sampled for performance, using Chart.js)
-- [ ] CSV upload via browse button (not drag/drop)
-- [ ] Column transformation UI with expected vs found fields mapping
+- [x] Desktop GUI
+- [x] Single screen layout (no scrolling)
+- [x] Progress bar and clock display during replay
+- [x] Real-time statistics dashboard (RPS, total requests)
+- [x] Preview mode with timing histogram visualization as line chart (sampled for performance, using Chart.js)
+- [x] CSV upload via browse button (not drag/drop)
+- [x] Column transformation UI with expected vs found fields mapping
+- [x] Inline logs panel with toggle button (shows "Welcome to ReFling!" on app load)
 
 ### Advanced Features
 - [ ] Iteration control (run Y times)
@@ -130,11 +131,17 @@ ReFling is a an application designed to replay historical traffic patterns exact
 
 **Performance Considerations:** Preview histograms use sampling to maintain GUI responsiveness across large datasets. Very large files (exceeding 1GB) will be rejected to prevent memory issues.
 
+## Code Architecture (v0.2)
+- Feature-based folder structure: `src/features/{csv,replay,duration,filters,columns,logs}/`
+- Shared utilities: `src/utils/{duration,timeseries}.ts`
+- Tests in `tests/` directory with matching file names (`foo.test.ts`)
+- App.tsx: ~200 lines (thin orchestrator), down from 700 lines
+- Each feature hook/component under 100 lines
+
 ## Next Steps
-1. Implement CSV parser and core timing engine  
-2. Build basic GUI with progress indicators
-3. Add preview histogram visualization
-4. Implement playback speed controls and filtering
-5. Test with sample data sets
+1. Add iteration control UI
+2. Implement CLI version for CI/CD
+3. Add memory monitoring dashboard
+4. Performance optimization for 100K+ request replays
 
 ---

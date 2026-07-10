@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseCSV, ColumnMapping } from "../../csv/parser";
+import { parseCSV, ColumnMapping } from "../../src/csv/parser";
 
 describe("CSV Parser", () => {
   test("should parse basic CSV with datetime and url columns", () => {

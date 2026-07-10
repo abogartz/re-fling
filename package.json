@@ -8,7 +8,7 @@
 		"dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
 		"hmr": "vite --port 5173",
 		"build:canary": "vite build && electrobun build --env=canary",
-		"test": "bun test --path-ignore-patterns='tests/**' src/tests/csv/*.test.ts src/tests/replay/*.test.ts",
+		"test": "bun test --path-ignore-patterns='e2e/**' tests/csv/*.test.ts tests/replay/*.test.ts",
 		"test:e2e": "playwright test",
 		"test:e2e:headed": "playwright test --headed",
 		"lint": "eslint src/",
