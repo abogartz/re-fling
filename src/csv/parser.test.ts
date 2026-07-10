@@ -1,6 +1,60 @@
 import { test, expect, describe } from "bun:test";
 import { parseCSV, ColumnMapping } from "../csv/parser";
 
+describe("CSV Parser - edge cases", () => {
+  test("naive split breaks on quoted fields with commas", () => {
+    // Parser uses line.split(",") — no CSV quoting support
+    const csv = `datetime,url
+2024-01-01T10:00:00Z,"/api/users,admin"
+2024-01-01T10:00:05Z,/api/posts`;
+
+    const result = parseCSV(csv);
+
+    // Row 1 has 3 values after naive split (url field splits on comma inside quotes)
+    // This is a known limitation — the test documents the behavior
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].message).toContain("columns");
+  });
+
+  test("handles empty lines between data rows", () => {
+    const csv = `datetime,url
+2024-01-01T10:00:00Z,/api/users
+
+2024-01-01T10:00:05Z,/api/posts
+`;
+
+    const result = parseCSV(csv);
+    expect(result.data).toHaveLength(2);
+  });
+
+  test("handles trailing newline", () => {
+    const csv = `datetime,url
+2024-01-01T10:00:00Z,/api/users
+2024-01-01T10:00:05Z,/api/posts
+`;
+
+    const result = parseCSV(csv);
+    expect(result.data).toHaveLength(2);
+  });
+
+  test("returns columns from header", () => {
+    const csv = `datetime,url,status
+2024-01-01T10:00:00Z,/api/users,200`;
+
+    const result = parseCSV(csv);
+    expect(result.columns).toEqual(["datetime", "url", "status"]);
+  });
+
+  test("handles extra columns beyond headers", () => {
+    // Parser checks values.length !== headers.length → error
+    const csv = `datetime,url
+2024-01-01T10:00:00Z,/api/users,extra`;
+
+    const result = parseCSV(csv);
+    expect(result.errors).toHaveLength(1);
+  });
+});
+
 describe("CSV Parser", () => {
   test("should parse basic CSV with datetime and url columns", () => {
     const csv = `datetime,url

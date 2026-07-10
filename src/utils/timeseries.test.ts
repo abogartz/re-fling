@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { calculateExpectedTimeseries } from "./timeseries";
+import { calculateExpectedTimeseries, recalcPreviewStats } from "./timeseries";
 
 describe("calculateExpectedTimeseries", () => {
   const makeData = (count: number, gapMs: number) => {
@@ -128,5 +128,92 @@ describe("calculateExpectedTimeseries", () => {
     expect(result.timestamps).toHaveLength(1);
     // All 4 rows in bin0 [0,1000), RPS = 4/1s = 4
     expect(result.rpsValues[0]).toBe(4);
+  });
+});
+
+describe("recalcPreviewStats", () => {
+  const makeData = (count: number, gapMs: number) => {
+    const base = new Date("2024-01-01T10:00:00Z").getTime();
+    return Array.from({ length: count }, (_, i) => ({
+      datetime: new Date(base + i * gapMs),
+      url: `/api/resource/${i}`,
+    }));
+  };
+
+  test("returns empty stats for no data", () => {
+    const config = { speed: 1, durationEnabled: false, durationValue: 0, durationUnit: "seconds" as const };
+    const result = recalcPreviewStats([], config);
+    expect(result.timeseries.timestamps).toEqual([]);
+    expect(result.timeseries.rpsValues).toEqual([]);
+    expect(result.totalRequests).toBe(0);
+  });
+
+  test("uses CSV span when duration disabled", () => {
+    const data = makeData(3, 1000); // 2s span
+    const config = { speed: 1, durationEnabled: false, durationValue: 0, durationUnit: "seconds" as const };
+    const result = recalcPreviewStats(data, config);
+    // No override → csvDuration=2000ms, no repeat needed
+    expect(result.totalRequests).toBe(3);
+    expect(result.timeseries.timestamps.length).toBeGreaterThan(0);
+  });
+
+  test("repeats data when duration exceeds CSV span", () => {
+    const data = makeData(2, 1000); // 1s span
+    const config = { speed: 1, durationEnabled: true, durationValue: 5, durationUnit: "seconds" as const };
+    // overrideMs = 5000ms, csvDuration = 1000ms → repeatCount = 5
+    const result = recalcPreviewStats(data, config);
+    expect(result.totalRequests).toBeGreaterThan(2);
+  });
+
+  test("no repeat when duration equals CSV span", () => {
+    const data = makeData(3, 1000); // 2s span
+    const config = { speed: 1, durationEnabled: true, durationValue: 2, durationUnit: "seconds" as const };
+    const result = recalcPreviewStats(data, config);
+    expect(result.totalRequests).toBe(3);
+  });
+
+  test("speed affects timeseries but not total request count", () => {
+    const data = makeData(4, 1000); // 3s span
+    const configSlow = { speed: 1, durationEnabled: true, durationValue: 3, durationUnit: "seconds" as const };
+    const configFast = { speed: 3, durationEnabled: true, durationValue: 3, durationUnit: "seconds" as const };
+
+    const resultSlow = recalcPreviewStats(data, configSlow);
+    const resultFast = recalcPreviewStats(data, configFast);
+
+    // Same data, same override → same totalRequests
+    expect(resultSlow.totalRequests).toBe(resultFast.totalRequests);
+    // But timeseries differs due to speed scaling playback time
+    expect(resultSlow.timeseries.rpsValues).not.toEqual(resultFast.timeseries.rpsValues);
+  });
+
+  test("duration in minutes converts correctly", () => {
+    const data = makeData(2, 1000); // 1s span
+    const config = { speed: 1, durationEnabled: true, durationValue: 1, durationUnit: "minutes" as const };
+    // overrideMs = 60000ms, csvDuration = 1000ms → repeatCount = 60
+    const result = recalcPreviewStats(data, config);
+    expect(result.totalRequests).toBeGreaterThan(2);
+  });
+
+  test("duration=0 with no override uses CSV span", () => {
+    const data = makeData(5, 500); // 2s span
+    const config = { speed: 1, durationEnabled: false, durationValue: 0, durationUnit: "seconds" as const };
+    const result = recalcPreviewStats(data, config);
+    expect(result.totalRequests).toBe(5);
+  });
+
+  test("EXPOSES BUG: trimming logic undercounts when repeating", () => {
+    // 2 rows spanning 1s. Duration=1500ms → repeatCount=2.
+    // Expected: ~3 rows (1.5 cycles)
+    // Bug: trimming loop breaks early because elapsed doesn't accumulate across cycles
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "/a" },
+      { datetime: new Date("2024-01-01T10:00:01Z"), url: "/b" },
+    ];
+    const config = { speed: 1, durationEnabled: true, durationValue: 1.5, durationUnit: "seconds" as const };
+    const result = recalcPreviewStats(data, config);
+
+    // Current bug: trimmed breaks after cycle 0 row1 because elapsed+maxTime > effectiveDuration
+    // Result: only 2 rows counted instead of ~3
+    expect(result.totalRequests).toBeGreaterThan(2); // Should be ~3, currently fails with 2
   });
 });

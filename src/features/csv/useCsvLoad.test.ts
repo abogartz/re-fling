@@ -236,7 +236,7 @@ describe("useCsvLoad", () => {
     expect(result.current.error).toBeNull();
   });
 
-  test("calls addLog with formatted data after successful parse", async () => {
+  test("calls addLog with formatted JSON data after successful parse", async () => {
     const { addLog } = await import("../../bun/logs");
 
     const { result } = renderHook(() => useCsvLoad());
@@ -251,6 +251,34 @@ describe("useCsvLoad", () => {
     });
 
     expect(addLog).toHaveBeenCalled();
+    const logArg = (addLog as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Should start with "requests: " prefix and contain valid JSON
+    expect(logArg.startsWith("requests: ")).toBe(true);
+    const jsonStr = logArg.slice("requests: ".length);
+    const parsed = JSON.parse(jsonStr);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(3);
+    expect(parsed[0]).toHaveProperty("url");
+    expect(parsed[0]).toHaveProperty("timing");
+  });
+
+  test("handleFileLoad sets error when file.text() throws", async () => {
+    const { result } = renderHook(() => useCsvLoad());
+
+    // Mock File with text() that throws
+    const throwingFile = {
+      text: () => Promise.reject(new Error("Failed to read file")),
+    } as unknown as File;
+
+    result.current.fileInputRef.current = {
+      files: [throwingFile],
+    } as unknown as HTMLInputElement;
+
+    await act(async () => {
+      await result.current.handleFileLoad();
+    });
+
+    expect(result.current.error).toBe("Failed to read file");
   });
 
   test("setColumnMapping with both mappings and valid rawText re-parses", async () => {
@@ -287,5 +315,52 @@ describe("useCsvLoad", () => {
     // Should auto-detect URL and DateTime columns (case-insensitive)
     expect(result.current.columnMapping.url).toBe("URL");
     expect(result.current.columnMapping.datetime).toBe("DateTime");
+  });
+
+  test("EXPOSES BUG: addLog uses csv-formatter with speed=1 and duration=0", async () => {
+    const { addLog } = await import("../../bun/logs");
+    const { formatRequestsForLog } = await import("../../services/csv-formatter");
+
+    const { result } = renderHook(() => useCsvLoad());
+    const file = createMockFile(csvText);
+
+    result.current.fileInputRef.current = {
+      files: [file],
+    } as unknown as HTMLInputElement;
+
+    await act(async () => {
+      await result.current.handleFileLoad();
+    });
+
+    // Verify addLog receives output from formatRequestsForLog(data, 1, 0)
+    expect(addLog).toHaveBeenCalled();
+    const logArg = (addLog as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const expectedFormat = formatRequestsForLog(
+      result.current.parsedData!.data,
+      1,
+      0
+    );
+    expect(logArg).toBe(expectedFormat);
+  });
+
+  test("EXPOSES BUG: incomplete column mapping clears parsedData", async () => {
+    const { result } = renderHook(() => useCsvLoad());
+    const file = createMockFile(csvText);
+
+    result.current.fileInputRef.current = {
+      files: [file],
+    } as unknown as HTMLInputElement;
+
+    await act(async () => {
+      await result.current.handleFileLoad();
+    });
+
+    // Set only url mapping (incomplete)
+    act(() => {
+      result.current.setColumnMapping({ url: "url" });
+    });
+
+    // Should clear parsedData since datetime is missing
+    expect(result.current.parsedData).toBeNull();
   });
 });

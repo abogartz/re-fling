@@ -251,6 +251,8 @@ describe("Replay Engine", () => {
     const finalState = engine.getState();
     expect(finalState.status).toBe("completed");
     expect(finalState.progress).toBe(1);
+    // activeRows may be repeated (CSV 20ms < target 50ms), so count >= original data length
+    expect(finalState.completedRequests).toBeGreaterThanOrEqual(3);
     expect(stateUpdates).toBeGreaterThan(0);
   });
 
@@ -475,6 +477,175 @@ describe("Replay Engine", () => {
 
     const state = engine.getState();
     expect(state.status).toBe("completed");
+    // sampleData spans 10s, target=500ms → cropped to ~1 row
+    expect(state.completedRequests).toBeGreaterThanOrEqual(1);
     expect(state.elapsed).toBeLessThanOrEqual(1200); // allow margin
+  });
+
+  test("pause changes status to paused", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 10000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.start();
+    expect(engine.getState().status).toBe("running");
+
+    engine.pause();
+    expect(engine.getState().status).toBe("paused");
+  });
+
+  test("resume changes status back to running", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 10000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.start();
+    engine.pause();
+    expect(engine.getState().status).toBe("paused");
+
+    engine.resume();
+    expect(engine.getState().status).toBe("running");
+  });
+
+  test("cancel changes status to cancelled", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 10000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.start();
+    engine.cancel();
+    expect(engine.getState().status).toBe("cancelled");
+  });
+
+  test("pause on non-running state is a no-op", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 0,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.pause(); // idle → no-op
+    expect(engine.getState().status).toBe("idle");
+  });
+
+  test("resume on non-paused state is a no-op", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 0,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.resume(); // idle → no-op
+    expect(engine.getState().status).toBe("idle");
+  });
+
+  test("cancel on idle is a no-op", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 0,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.cancel(); // idle → no-op
+    expect(engine.getState().status).toBe("idle");
+  });
+
+  test("start on running state is a no-op", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 10000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    engine.start();
+    engine.start(); // already running → no-op
+    expect(engine.getState().status).toBe("running");
+  });
+
+  test("isRunning returns correct boolean", () => {
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 10000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(sampleData, config);
+    expect(engine.isRunning()).toBe(false);
+
+    engine.start();
+    expect(engine.isRunning()).toBe(true);
+
+    engine.pause();
+    expect(engine.isRunning()).toBe(false);
+  });
+
+  test("EXPOSES BUG: timeseries RPS values are incorrect when data is repeated with gaps between cycles", () => {
+    // 2 rows 1s apart, duration=3000ms → should have gap between cycles
+    // Cycle 0: R1@0, R2@1000 (span=1000)
+    // Gap: 1000ms (avg gap)
+    // Cycle 1: R1@2000, R2@3000
+    // Expected RPS: bin0=1, bin1=1, bin2=2 (R2 from cycle 0 + R1 from cycle 1)
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
+    ];
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 3000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(data, config);
+    const state = engine.getState();
+
+    // Current bug: timeseries doesn't account for gaps between cycles,
+    // so bin2 gets 1 instead of 2 (R2 from cycle 0 is at 1000ms, not accounted for)
+    expect(state.timeseries.rpsValues[2]).toBe(2); // Should be 2, currently fails with 1
+  });
+
+  test("EXPOSES BUG: activeRows timing is incorrect when repeating with gaps between cycles", () => {
+    // 2 rows 1s apart, duration=3000ms
+    // Expected: R1@0, R2@1000, [gap 1000ms], R1@2000, R2@3000
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
+    ];
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 3000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(data, config);
+    const state = engine.getState();
+
+    // Check timing of repeated rows
+    // Row 2 should be at 2000ms (after gap), not 1000ms
+    const row2Time = new Date(state.activeRows[2].datetime).getTime();
+    const firstRowTime = new Date(state.activeRows[0].datetime).getTime();
+    expect(row2Time - firstRowTime).toBe(2000); // Should be 2000ms, currently fails with 1000
   });
 });

@@ -116,4 +116,26 @@ describe("formatRequestsForLog", () => {
     expect(parsed[0]).toHaveProperty("url");
     expect(parsed[0]).toHaveProperty("timing");
   });
+
+  test("EXPOSES BUG: timing between cycles includes gap (avg inter-row gap)", () => {
+    // 2 rows spanning 5s (gap=5s). Duration=15000ms → 3 repeats.
+    // With gap between cycles (avg gap = 5s), cycle 1 should start at 10s (5s span + 5s gap).
+    // Current bug: cycles placed back-to-back at 0s, 5s, 10s instead of 0s, 10s, 20s.
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "/a" },
+      { datetime: new Date("2024-01-01T10:00:05Z"), url: "/b" },
+    ];
+    const result = formatRequestsForLog(data, 1, 15000);
+    const parsed = JSON.parse(result.replace("requests: ", ""));
+
+    // Should have 6 rows (2 × 3 cycles)
+    expect(parsed).toHaveLength(6);
+
+    // Check timing shows gap between cycles:
+    // Cycle 0: 0.00s, 5.00s
+    // Cycle 1: should be ~10.00s, ~15.00s (5s span + 5s avg gap)
+    // Current bug: cycle 1 starts at 5.00s (back-to-back), not 10.00s
+    expect(parsed[2].timing).toBe("10.00s"); // Row 0 of cycle 1
+    expect(parsed[3].timing).toBe("15.00s"); // Row 1 of cycle 1
+  });
 });

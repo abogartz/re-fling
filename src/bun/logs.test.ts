@@ -114,4 +114,39 @@ describe("bun/logs module", () => {
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] $/);
   });
+
+  test("EXPOSES BUG: rapid log additions maintain cap correctly", () => {
+    // Add logs rapidly to ensure slice operation doesn't have off-by-one
+    for (let i = 0; i < 2000; i++) {
+      addLog(`msg-${i}`);
+    }
+
+    const logs = getLogs();
+    expect(logs).toHaveLength(1000);
+    
+    // First log should be msg-1000 (oldest kept)
+    expect(logs[0]).toContain("msg-1000");
+    // Last log should be msg-1999
+    expect(logs[999]).toContain("msg-1999");
+  });
+
+  test("EXPOSES BUG: unsubscribed listener does not fire", () => {
+    let callCount = 0;
+    const unsub = onLogsChange(() => { callCount++; });
+    
+    // Add logs before unsubscribe
+    addLog("before");
+    expect(callCount).toBe(1);
+    
+    // Unsubscribe
+    unsub();
+    
+    // Add more logs - listener should not fire
+    for (let i = 0; i < 100; i++) {
+      addLog(`msg-${i}`);
+    }
+    
+    // Listener should still have only fired once
+    expect(callCount).toBe(1);
+  });
 });

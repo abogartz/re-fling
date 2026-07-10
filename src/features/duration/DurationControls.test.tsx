@@ -328,8 +328,9 @@ describe("DurationControls", () => {
   });
 
   test("handles speed with two decimal places", () => {
-    render(<DurationControls {...defaultProps} speed={1.25} actualDurationMs={1000} />);
+    render(<DurationControls {...defaultProps} speed={2.35} actualDurationMs={1000} />);
     const p = document.querySelector("p.text-\\[10px\\].text-gray-400") as HTMLParagraphElement;
-    expect(p.textContent).toContain("1.3x");
+    // 2.35.toFixed(1) rounds to "2.4" (clearly above .x5 boundary)
+    expect(p.textContent).toContain("2.4x");
   });
 });
