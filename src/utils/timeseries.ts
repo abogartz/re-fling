@@ -1,10 +1,22 @@
 import { CSVRow } from "../csv/parser";
-import { calculateActualDuration } from "./duration";
+import { calculateActualDuration, getEffectiveDurationMs } from "./duration";
 
 export interface TimeseriesResult {
   timestamps: number[];
   rpsValues: number[];
 }
+
+export interface PreviewStats {
+  timeseries: TimeseriesResult;
+  totalRequests: number;
+}
+
+export type DurationConfig = {
+  speed: number;
+  durationEnabled: boolean;
+  durationValue: number;
+  durationUnit: "seconds" | "minutes" | "hours";
+};
 
 export function calculateExpectedTimeseries(
   data: CSVRow[],
@@ -41,12 +53,61 @@ export function calculateExpectedTimeseries(
       }
     }
 
-    const rps = Math.round(countInBin * speed);
+    const rps = countInBin;
     rpsValues.push(rps);
     timestamps.push(binStart);
   }
 
   return { timestamps, rpsValues };
+}
+
+export function recalcPreviewStats(
+  data: CSVRow[],
+  config: DurationConfig,
+): PreviewStats {
+  const csvDuration = calculateActualDuration(data);
+  const overrideMs = getEffectiveDurationFromConfig(config);
+  const effectiveDuration = overrideMs > 0 ? overrideMs : csvDuration;
+  const ts = calculateExpectedTimeseries(data, effectiveDuration, config.speed);
+
+  let previewTotalRequests = data.length;
+  if (effectiveDuration > 0 && csvDuration > 0) {
+    const repeatCount = Math.ceil(effectiveDuration / csvDuration);
+    previewTotalRequests = data.length * repeatCount;
+
+    if (repeatCount > 1) {
+      const maxTime =
+        new Date(data[data.length - 1].datetime).getTime() -
+        new Date(data[0].datetime).getTime();
+      if (maxTime > 0) {
+        let trimmed = 0;
+        let elapsed = 0;
+        for (let r = 0; r < repeatCount; r++) {
+          for (const row of data) {
+            const t =
+              new Date(row.datetime).getTime() -
+              new Date(data[0].datetime).getTime();
+            if (elapsed + maxTime > effectiveDuration && trimmed > 0) {
+              break;
+            }
+            trimmed++;
+            elapsed = t;
+          }
+        }
+        previewTotalRequests = trimmed;
+      }
+    }
+  }
+
+  return { timeseries: ts, totalRequests: previewTotalRequests };
+}
+
+function getEffectiveDurationFromConfig(config: DurationConfig): number {
+  return getEffectiveDurationMs(
+    config.durationEnabled,
+    config.durationValue,
+    config.durationUnit,
+  );
 }
 
 
