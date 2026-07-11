@@ -1,6 +1,7 @@
 import { CSVRow } from "../csv/parser";
 import { calculateActualDuration, getEffectiveDurationMs } from "./duration";
 
+
 export interface TimeseriesResult {
   timestamps: number[];
   rpsValues: number[];
@@ -27,6 +28,7 @@ export function calculateExpectedTimeseries(
     return { timestamps: [], rpsValues: [] };
   }
 
+  // Work with raw data directly (no repetition/cropping) — timeseries previews original pattern
   const csvDuration = calculateActualDuration(data);
   const effectiveDurationMs = durationMs / speed;
   const binSizeMs = 1000;
@@ -34,7 +36,7 @@ export function calculateExpectedTimeseries(
 
   const rpsValues: number[] = [];
   const timestamps: number[] = [];
-  const firstTime = new Date(data[0].datetime).getTime();
+  const firstRowTime = new Date(data[0].datetime).getTime();
 
   for (let i = 0; i < totalBins; i++) {
     const binStart = i * binSizeMs;
@@ -42,19 +44,18 @@ export function calculateExpectedTimeseries(
 
     let countInBin = 0;
     for (const row of data) {
-      const csvTime = new Date(row.datetime).getTime();
+      const rowTime = new Date(row.datetime).getTime();
+      const offsetFromFirst = rowTime - firstRowTime;
+      // When all rows share the same timestamp, csvDuration=0 → all land in bin0
       const playbackTime =
-        csvDuration > 0
-          ? (csvTime - firstTime) * effectiveDurationMs / csvDuration
-          : 0;
+        csvDuration > 0 ? offsetFromFirst * effectiveDurationMs / csvDuration : 0;
 
       if (playbackTime >= binStart && playbackTime < binEnd) {
         countInBin++;
       }
     }
 
-    const rps = countInBin;
-    rpsValues.push(rps);
+    rpsValues.push(countInBin);
     timestamps.push(binStart);
   }
 
@@ -70,35 +71,17 @@ export function recalcPreviewStats(
   const effectiveDuration = overrideMs > 0 ? overrideMs : csvDuration;
   const ts = calculateExpectedTimeseries(data, effectiveDuration, config.speed);
 
-  let previewTotalRequests = data.length;
-  if (effectiveDuration > 0 && csvDuration > 0) {
-    const repeatCount = Math.ceil(effectiveDuration / csvDuration);
-    previewTotalRequests = data.length * repeatCount;
+  // Preview totalRequests: count rows fitting within effectiveDuration (no inter-cycle gap)
+  const fullCycles = csvDuration > 0 ? Math.floor(effectiveDuration / csvDuration) : 0;
+  const remainingMs = csvDuration > 0 ? effectiveDuration % csvDuration : 0;
+  const firstTime = data.length > 0 ? new Date(data[0].datetime).getTime() : 0;
+  const partialRows =
+    remainingMs > 0
+      ? data.filter((r) => new Date(r.datetime).getTime() - firstTime <= remainingMs).length
+      : 0;
+  const totalRequests = fullCycles * data.length + partialRows;
 
-    if (repeatCount > 1) {
-      const maxTime =
-        new Date(data[data.length - 1].datetime).getTime() -
-        new Date(data[0].datetime).getTime();
-      if (maxTime > 0) {
-        let trimmed = 0;
-        for (let r = 0; r < repeatCount; r++) {
-          for (const row of data) {
-            const t =
-              new Date(row.datetime).getTime() -
-              new Date(data[0].datetime).getTime();
-            const absTime = r * maxTime + t;
-            if (absTime > effectiveDuration) {
-              break;
-            }
-            trimmed++;
-          }
-        }
-        previewTotalRequests = trimmed;
-      }
-    }
-  }
-
-  return { timeseries: ts, totalRequests: previewTotalRequests };
+  return { timeseries: ts, totalRequests };
 }
 
 function getEffectiveDurationFromConfig(config: DurationConfig): number {

@@ -1,5 +1,6 @@
 import { CSVRow } from "../csv/parser";
-import { calculateActualDuration as calcDuration } from "../utils/duration";
+import { calculateActualDuration } from "../utils/duration";
+import { buildActiveRows } from "../utils/buildActiveRows";
 
 // --- Types ---
 
@@ -47,6 +48,7 @@ export class ReplayEngine {
   private filteredRows: CSVRow[] = [];
   private currentRow: number = 0;
   private actualDurationMs: number = 0; // Time span of the CSV data in ms
+  private filteredDataForActiveRows: CSVRow[] = [];
 
   constructor() {
     this.state = this.getInitialState();
@@ -71,7 +73,7 @@ export class ReplayEngine {
 
   setData(data: CSVRow[], config: ReplayConfig): void {
     this.csvData = data;
-    this.actualDurationMs = this.calculateActualDuration(data);
+    this.actualDurationMs = calculateActualDuration(data);
 
     // Auto-set duration to actual CSV span if not provided or zero
     const effectiveConfig = {
@@ -86,10 +88,14 @@ export class ReplayEngine {
       ...row,
       url: this.resolveBaseUrl(row),
     }));
+    this.filteredDataForActiveRows = [...this.filteredRows];
 
     // Pre-calculate active rows that fit within the target duration.
     // Crop if too long, repeat if too short.
-    const { activeRows, delayMs } = this.buildActiveRows(this.filteredRows, effectiveConfig);
+    const { activeRows, delayMs } = buildActiveRows(this.filteredRows, {
+      speed: effectiveConfig.speed,
+      duration: effectiveConfig.duration,
+    });
 
     this.state = {
       ...this.getInitialState(),
@@ -105,102 +111,18 @@ export class ReplayEngine {
   }
 
   /**
-   * Build an array of rows that fits the target duration.
-   * - If CSV span > duration: crop to first N rows whose cumulative time <= duration
-   * - If CSV span < duration: repeat (cycle) the array until it fills the duration
-   * Returns uniform delay so each row gets equal spacing.
-   */
-  /**
    * Calculate how many rows would be in the active set for the given config.
    * Used to preview the total request count before starting replay.
    */
   public calculateActiveRowsCount(rows: CSVRow[], config: ReplayConfig): number {
-    const { activeRows } = this.buildActiveRows(rows, config);
+    const { activeRows } = buildActiveRows(rows, {
+      speed: config.speed,
+      duration: config.duration,
+    });
     return activeRows.length;
   }
 
-  private buildActiveRows(rows: CSVRow[], config: ReplayConfig): { activeRows: CSVRow[]; delayMs: number } {
-    if (rows.length === 0) {
-      return { activeRows: [], delayMs: 0 };
-    }
 
-    const targetDuration = config.duration ?? this.actualDurationMs;
-    if (targetDuration <= 0 || rows.length === 1) {
-      // No truncation needed or only one row — use it as-is
-      return { activeRows: [...rows], delayMs: 0 };
-    }
-
-    const csvSpan = this.calculateActualDuration(this.csvData);
-
-    if (csvSpan < targetDuration) {
-      // CSV is shorter than target → repeat/cycle to fill duration.
-      // Preserve internal gaps within each cycle; add uniform gap between cycles.
-      // Gap = average gap from original CSV, adjusted for speed.
-      const avgGap = csvSpan / (rows.length - 1);
-      const effectiveGap = avgGap / (config.speed ?? 1);
-      
-      const firstRowTime = new Date(rows[0].datetime).getTime();
-      const activeRows: CSVRow[] = [];
-      let cycleOffset = 0;
-      
-      while (true) {
-        // Add the entire sequence for this cycle with offset
-        let cycleExceedsTarget = false;
-        for (const row of rows) {
-          const rowTime = new Date(row.datetime).getTime();
-          // Normalize to relative time from first row, then add cycle offset
-          const relativeTime = rowTime - firstRowTime;
-          const shiftedTime = relativeTime + cycleOffset;
-          if (shiftedTime > targetDuration) {
-            cycleExceedsTarget = true;
-            break;
-          }
-          const shiftedRow: CSVRow = {
-            ...row,
-            datetime: new Date(firstRowTime + shiftedTime)
-          };
-          activeRows.push(shiftedRow);
-        }
-        
-        if (cycleExceedsTarget) {
-          // Don't start another cycle
-          break;
-        }
-        
-        // Advance offset for next cycle: original span + gap
-        cycleOffset += csvSpan + effectiveGap;
-      }
-      
-      // Calculate uniform delay for tick() pacing (not used for timeseries)
-      const delayMs = activeRows.length > 1 ? targetDuration / (activeRows.length - 1) : 0;
-      return { activeRows, delayMs };
-    }
-
-    // CSV is longer than or equal to target → crop rows that fit within duration
-    const firstTime = new Date(rows[0].datetime).getTime();
-    const cutoff = firstTime + targetDuration;
-    const cropped: CSVRow[] = [];
-    for (const row of rows) {
-      const t = new Date(row.datetime).getTime();
-      if (t <= cutoff) {
-        cropped.push(row);
-      } else if (t > cutoff + 1) {
-        // Break early once we're past the cutoff with margin
-        break;
-      }
-    }
-
-    if (cropped.length === 0) {
-      return { activeRows: [rows[0]], delayMs: 0 };
-    }
-
-    const delayMs = cropped.length > 1 ? targetDuration / (cropped.length - 1) : 0;
-    return { activeRows: cropped, delayMs };
-  }
-
-  private calculateActualDuration(data: CSVRow[]): number {
-    return calcDuration(data);
-  }
 
 
 
