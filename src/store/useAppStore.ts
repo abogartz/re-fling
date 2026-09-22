@@ -67,9 +67,10 @@ export interface LogsActions {
 
 // --- Replay Slice ---
 
-export interface ReplaySliceState extends Omit<ReplayState, "status" | "config"> {
+export interface ReplaySliceState extends Omit<ReplayState, "status" | "config" | "error"> {
   status: ReplayState["status"];
   config: ReplayConfig | null;
+  error: string | null;
   engineRef: import("../replay/engine").ReplayEngine | null;
 }
 

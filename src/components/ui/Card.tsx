@@ -2,7 +2,7 @@ import React from "react";
 
 interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   title: string;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }
 
 export function Card({ title, children, className = "", ...props }: CardProps) {

@@ -231,7 +231,14 @@ describe("ColumnMapping", () => {
   });
 
   test("handles rawParsed with many rows but no columns", () => {
-    const rawParsed = { data: Array.from({ length: 1000 }, () => ({})), errors: [], columns: [] };
+    const rawParsed = {
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        url: `/api/resource/${i}`,
+        datetime: new Date(`2024-01-01T10:00:${String(i % 60).padStart(2, "0")}Z`),
+      })),
+      errors: [],
+      columns: [],
+    };
     render(<ColumnMapping {...defaultProps} rawParsed={rawParsed} />);
     expect(screen.getByText("Column Mapping")).toBeInTheDocument();
   });
