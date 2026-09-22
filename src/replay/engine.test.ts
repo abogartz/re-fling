@@ -70,7 +70,7 @@ describe("Replay Engine", () => {
     expect(state.config?.speed).toBe(2.0);
   });
 
-  test("should have uniform delay across active rows", () => {
+  test("should have row delays across active rows", () => {
     const config: ReplayConfig = {
       speed: 1.0,
       duration: 5000,
@@ -81,8 +81,8 @@ describe("Replay Engine", () => {
     engine.setData(sampleData, config);
     const state = engine.getState();
 
-    // All rows in active array should use same delay
-    expect(state.delayMs).toBeGreaterThan(0);
+    // sampleData row gaps are 5000ms → R1@0, R2@5000 (R3@10000 cropped)
+    expect(state.rowDelays).toEqual([5000, 0]);
   });
 
   test("should respect URL filter patterns", () => {
@@ -162,7 +162,9 @@ describe("Replay Engine", () => {
 
   test("should handle large data sets efficiently", () => {
     const largeData = Array.from({ length: 1000 }, (_, i) => ({
-      datetime: new Date(`2024-01-01T10:${(i / 60).toFixed(0).padStart(2, "0")}:${(i % 60).toString().padStart(2, "0")}Z`),
+      datetime: new Date(
+        `2024-01-01T10:${String(Math.floor(i / 60)).padStart(2, "0")}:${(i % 60).toString().padStart(2, "0")}Z`,
+      ),
       url: `http://localhost:9000/api/resource/${i % 50}`,
     }));
 
@@ -344,7 +346,7 @@ describe("Replay Engine", () => {
 
   test("truncates: activeRows fits within target duration", () => {
     // sampleData spans 10s (3 rows at 5s intervals).
-    // Target duration = 1s → should crop to ~1 row.
+    // Target duration = 1s → should crop to the first row only.
     const config: ReplayConfig = {
       speed: 1.0,
       duration: 1000, // 1 second
@@ -356,15 +358,14 @@ describe("Replay Engine", () => {
     const state = engine.getState();
 
     // activeRows should be cropped to fit within 1s
-    expect(state.activeRows.length).toBeLessThanOrEqual(3);
-    // delayMs should be uniform
-    if (state.activeRows.length > 1) {
-      expect(state.delayMs).toBeCloseTo(1000 / (state.activeRows.length - 1), 0);
-    }
+    expect(state.activeRows.length).toBe(1);
+    expect(state.rowDelays).toEqual([0]);
   });
 
   test("repeats: activeRows fills duration when CSV is shorter", () => {
-    // 2-row data spanning 5s. Target = 20s → should repeat ~4x.
+    // 2-row data spanning 5s. Target = 20s → repeat every 10s (span + min gap).
+    // Rows: 0, 5000 | 10000, 15000 | 20000, 25000 — last cycle (start 20000 ≤ 20s)
+    // plays to completion even though its second row lands past the window.
     const shortData = [
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
       { datetime: new Date("2024-01-01T10:00:05Z"), url: "http://localhost/b" },
@@ -380,16 +381,12 @@ describe("Replay Engine", () => {
     engine.setData(shortData, config);
     const state = engine.getState();
 
-    // activeRows should be longer than original (repeated)
-    expect(state.activeRows.length).toBeGreaterThan(shortData.length);
-    // Uniform delay across all rows
-    if (state.activeRows.length > 1) {
-      expect(state.delayMs).toBeCloseTo(20000 / (state.activeRows.length - 1), 0);
-    }
+    expect(state.activeRows.length).toBe(6);
+    expect(state.rowDelays).toEqual([5000, 5000, 5000, 5000, 5000, 0]);
   });
 
-  test("repeat exact boundary: 2 rows 1s apart, duration=2000ms → 3 rows (R1,R2,R1) not 4", () => {
-    // Reproduces bug where old trim loop never fired, producing 4 rows.
+  test("repeat exact boundary: 2 rows 1s apart, duration=2000ms → 4 rows (R1,R2,R1,R2)", () => {
+    // The cycle starting at 2000ms fires fully: R1@2000, R2@3000.
     const data = [
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
       { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
@@ -404,13 +401,13 @@ describe("Replay Engine", () => {
     engine.setData(data, config);
     const state = engine.getState();
 
-    expect(state.activeRows.length).toBe(3); // R1, R2, R1
-    expect(state.delayMs).toBeCloseTo(1000, 0);
+    expect(state.activeRows.length).toBe(4); // R1, R2, R1, R2
+    expect(state.rowDelays).toEqual([1000, 1000, 1000, 0]);
   });
 
-  test("repeat: timeseries shows uniform RPS when data is repeated", () => {
-    // 2 rows 1s apart, duration=2000ms → R1@0, R2@1000, R1@2000
-    // Should show 1 RPS in each 1s bin (0-1s and 1-2s)
+  test("repeat: timeseries shows the completed-cycle RPS profile", () => {
+    // 2 rows 1s apart, duration=2000ms → R1@0, R2@1000, R1@2000, R2@3000.
+    // Bins over the 2s window: [1k)=1, [1k,2k)=1, [2k,3k)=2 (both @2000 and @3000).
     const data = [
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
       { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
@@ -426,7 +423,7 @@ describe("Replay Engine", () => {
     const state = engine.getState();
 
     expect(state.timeseries.timestamps).toHaveLength(3); // bins at 0, 1000, 2000
-    expect(state.timeseries.rpsValues).toEqual([1, 1, 1]); // 1 RPS in each bin
+    expect(state.timeseries.rpsValues).toEqual([1, 1, 2]);
   });
 
   test("exact fit: no repetition or cropping needed", () => {
@@ -600,12 +597,9 @@ describe("Replay Engine", () => {
     expect(engine.isRunning()).toBe(false);
   });
 
-  test("EXPOSES BUG: timeseries RPS values are incorrect when data is repeated with gaps between cycles", () => {
-    // 2 rows 1s apart, duration=3000ms → should have gap between cycles
-    // Cycle 0: R1@0, R2@1000 (span=1000)
-    // Gap: 1000ms (avg gap)
-    // Cycle 1: R1@2000, R2@3000
-    // Expected RPS: bin0=1, bin1=1, bin2=2 (R2 from cycle 0 + R1 from cycle 1)
+  test("timeseries RPS values are correct when data is repeated with gaps between cycles", () => {
+    // 2 rows 1s apart, duration=3000ms → cycles at R1@0/R2@1000, R1@2000/R2@3000.
+    // bin2 [2000,3000) contains only R1 → 1
     const data = [
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
       { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
@@ -626,9 +620,9 @@ describe("Replay Engine", () => {
     expect(state.timeseries.rpsValues[2]).toBe(1);
   });
 
-  test("EXPOSES BUG: activeRows timing is incorrect when repeating with gaps between cycles", () => {
+  test("activeRows timing repeats with the tightest gap between cycles", () => {
     // 2 rows 1s apart, duration=3000ms
-    // Expected: R1@0, R2@1000, [gap 1000ms], R1@2000, R2@3000
+    // Rows: R1@0, R2@1000, R1@2000, R2@3000 (cycleAdvance = span + minGap)
     const data = [
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
       { datetime: new Date("2024-01-01T10:00:01Z"), url: "http://localhost/b" },
@@ -648,5 +642,75 @@ describe("Replay Engine", () => {
     const row2Time = new Date(state.activeRows[2].datetime).getTime();
     const firstRowTime = new Date(state.activeRows[0].datetime).getTime();
     expect(row2Time - firstRowTime).toBe(2000); // Should be 2000ms, currently fails with 1000
+  });
+
+  test("speed scales row delays: 2 rows 5s apart, speed 2 → 2500ms", () => {
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:05Z"), url: "http://localhost/b" },
+    ];
+    const config: ReplayConfig = {
+      speed: 2.0,
+      duration: 0, // natural: span / speed = 5000 / 2 = 2500ms window
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(data, config);
+    const state = engine.getState();
+
+    // Original 5s gap / speed 2 = 2.5s between the two rows
+    expect(state.rowDelays[0]).toBe(2500);
+    expect(state.config?.duration).toBe(2500); // auto-set to natural scaled span
+  });
+
+  test("speed changes repeat fill count: 2 rows 10s apart, override 20s", () => {
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:10Z"), url: "http://localhost/b" },
+    ];
+
+    const config1: ReplayConfig = {
+      speed: 1.0,
+      duration: 20000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+    engine.setData(data, config1);
+    // cycles at 0 (@0,@10000) and 20000 (@20000,@30000 complete) → 4 rows
+    expect(engine.getState().activeRows.length).toBe(4);
+
+    const config2: ReplayConfig = {
+      speed: 2.0,
+      duration: 20000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+    engine.setData(data, config2);
+    // gap/speed = 5s per step; cycles at 0,10000,20000 → 6 rows (0,5,10,15,20,25)
+    expect(engine.getState().activeRows.length).toBe(6);
+  });
+
+  test("natural duration repeats to fill a longer window", () => {
+    // 3 rows at 0, 5s, 6s with speed 1 → natural window = 6s, minGap = 1s.
+    // Override 20s → rows at 0,5,6 | 7,12,13 | 14,19,20 (9 rows).
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "http://localhost/a" },
+      { datetime: new Date("2024-01-01T10:00:05Z"), url: "http://localhost/b" },
+      { datetime: new Date("2024-01-01T10:00:06Z"), url: "http://localhost/c" },
+    ];
+    const config: ReplayConfig = {
+      speed: 1.0,
+      duration: 20000,
+      baseUrl: "",
+      filterPatterns: [],
+    };
+
+    engine.setData(data, config);
+    const state = engine.getState();
+
+    expect(state.activeRows.length).toBe(9);
+    // gaps: 5s,1s within cycle; 1s wrap (min gap); repeats + 0 for last
+    expect(state.rowDelays).toEqual([5000, 1000, 1000, 5000, 1000, 1000, 5000, 1000, 0]);
   });
 });

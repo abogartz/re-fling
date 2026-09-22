@@ -16,6 +16,26 @@ test.describe("ReFling E2E Tests", () => {
     await expect(page.locator("h1")).toContainText("ReFling");
   });
 
+  test("should show the replay icon next to the title", async ({ page }) => {
+    const icon = page.locator('[data-testid="app-icon"]');
+    await expect(icon).toBeVisible();
+    // Icon must sit inside the title (h1) next to the "ReFling" text
+    await expect(page.locator("h1")).toContainText("ReFling");
+    await expect(icon.locator("svg")).toBeVisible();
+    // Fill is driven by currentColor → resolves to the light text color (gray-400: rgb(156,163,175))
+    const fill = await icon.locator("svg path").first().evaluate((el) =>
+      window.getComputedStyle(el).fill,
+    );
+    expect(fill).toBe("rgb(156, 163, 175)");
+    const lightTextColor = await page
+      .locator("h1")
+      .locator("..")
+      .locator("p")
+      .first()
+      .evaluate((el) => window.getComputedStyle(el).color);
+    expect(fill).toBe(lightTextColor);
+  });
+
   test("should have file input for CSV upload", async ({ page }) => {
     const fileInput = page.locator('input[type="file"]');
     await expect(fileInput).toBeVisible();
@@ -49,12 +69,14 @@ test.describe("ReFling E2E Tests", () => {
     ).toBeVisible();
 
     // Check for input fields
-    const speedInput = page.locator('input[placeholder*="Speed" i], input[type="number"]').first();
-    const durationInput = page.locator('input[placeholder*="Duration" i]');
+    const speedInput = page.locator('[data-testid="speed-input"]');
+    const durationInput = page.locator('[data-testid="duration-input"]');
     const iterationsInput = page.locator('input[placeholder*="Iteration" i]');
 
-    // At least one of these should be visible
-    await expect(speedInput.or(durationInput).or(iterationsInput)).toBeVisible();
+    // Each control should be visible
+    await expect(speedInput).toBeVisible();
+    await expect(durationInput).toBeVisible();
+    await expect(iterationsInput.or(page.locator('[data-testid="duration-input"]'))).toBeVisible();
   });
 
   test("should have base URL and filter patterns inputs", async ({ page }) => {
@@ -215,6 +237,44 @@ test.describe("ReFling E2E Tests", () => {
     }
   });
 
+  test("should filter out requests matching a filter pattern", async ({ page }) => {
+    const filePath = "examples/test_requests.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Wait for file to load
+    await expect(
+      page.locator("p").filter({ hasText: "Loaded" }),
+    ).toBeVisible();
+
+    // Filter out any request whose URL contains "abc" (matches uid=abc123def456)
+    const filterInput = page.locator('input[placeholder="Filter patterns"]');
+    await filterInput.fill("abc");
+
+    // Click Start to trigger engine.setData() which applies filter patterns
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await startBtn.click();
+
+    // Wait for replay to start (status changes from idle)
+    await expect(
+      page.locator('[data-testid="replay-status"]'),
+    ).toBeVisible({ timeout: 5000 });
+
+    // Read the filtered rows from the engine state
+    const filteredUrls = await page.evaluate(() => {
+      const engine = (window as any).__engineRef;
+      if (!engine) return [];
+      return engine.getFilteredRows().map((r: any) => r.url);
+    });
+
+    // 30 data rows in the CSV, 3 urls contain "abc" → 27 remain
+    expect(filteredUrls.length).toBe(27);
+    for (const url of filteredUrls) {
+      expect(url).not.toMatch(/abc/);
+    }
+    expect(filteredUrls.some((url: string) => url.includes("abc"))).toBe(false);
+  });
+
   test("stop button disabled before start and enabled during run", async ({
     page,
   }) => {
@@ -270,7 +330,7 @@ test.describe("ReFling E2E Tests", () => {
     await checkbox.check();
 
     // Set duration value to 1 second
-    const durationNumberInput = page.locator('input[type="number"]').first();
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
     await durationNumberInput.fill("1");
 
     // Ensure unit is "seconds" (default) — scope to Replay Configuration section
@@ -371,7 +431,7 @@ test.describe("ReFling E2E Tests", () => {
     // Enable duration override to 1 second so replay finishes fast
     const checkbox = page.locator('input[type="checkbox"]');
     await checkbox.check();
-    const durationNumberInput = page.locator('input[type="number"]').first();
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
     await durationNumberInput.fill("1");
 
     // Click Start and verify replay begins
@@ -393,7 +453,7 @@ test.describe("ReFling E2E Tests", () => {
     expect(finalStatus).toBe("completed");
   });
 
-  test("should update timeseries when speed slider changes", async ({ page }) => {
+  test("should update timeseries when speed changes", async ({ page }) => {
     const filePath = "examples/test_requests.csv";
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles(filePath);
@@ -419,12 +479,8 @@ test.describe("ReFling E2E Tests", () => {
     expect(initialData).not.toBeNull();
     const initialLabels = initialData!.labels.length;
 
-    // Change speed to 2x using the slider
-    const speedSlider = page.locator('input[type="range"]');
-    await speedSlider.evaluate((el: HTMLInputElement) => {
-      el.value = "2.0";
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    // Change speed to 2× via the preset chip
+    await page.locator('[data-testid="speed-preset-2"]').click();
 
     // Wait for reactivity
     await page.waitForTimeout(500);
@@ -454,7 +510,9 @@ test.describe("ReFling E2E Tests", () => {
     await page.screenshot({ path: `${SCREENSHOT_DIR}/04-speed-change.png`, fullPage: true });
   });
 
-  test("2s override on 1s-apart CSV shows 3 bins and completes in ~2s", async ({ page }) => {
+  test("CORE: 2s override + 2x speed on 1s-apart CSV → 6 requests, 2 RPS per bin", async ({ page }) => {
+    // The user's core scenario: 2 rows 1s apart, speed 2x, duration 2s → 6 total
+    // requests at 0, 0.5, 1.0, 1.5, 2.0, 2.5s = flat 2 RPS ([2,2,2]).
     const filePath = "examples/test_1s_interval.csv";
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles(filePath);
@@ -467,7 +525,7 @@ test.describe("ReFling E2E Tests", () => {
     const checkbox = page.locator('input[type="checkbox"]');
     await checkbox.check();
 
-    const durationNumberInput = page.locator('input[type="number"]').first();
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
     await durationNumberInput.fill("2");
 
     // Ensure unit is "seconds"
@@ -478,10 +536,13 @@ test.describe("ReFling E2E Tests", () => {
       await unitSelect.selectOption("seconds");
     }
 
+    // Set speed to 2× via the preset chip
+    await page.locator('[data-testid="speed-preset-2"]').click();
+
     // Wait for timeseries to update
     await page.waitForTimeout(500);
 
-    // Verify chart shows 3 bins (0s, 1s, 2s)
+    // Verify chart shows 3 bins (0s, 1s, 2s) with 2 RPS each
     const chartData = await page.evaluate(() => {
       const chart = window["__chartInstance"];
       if (!chart || !chart.data) return null;
@@ -500,8 +561,23 @@ test.describe("ReFling E2E Tests", () => {
     expect(chartData!.labels[0]).toBe("0.0s");
     expect(chartData!.labels[1]).toBe("1.0s");
     expect(chartData!.labels[2]).toBe("2.0s");
+    // Each 1s bin receives exactly 2 requests → 2 RPS
+    expect(chartData!.datasets[0].data).toEqual([2, 2, 2]);
 
-    // Click Start and verify replay completes in ~2 seconds
+    // The UI should advertise 6 total requests before Start
+    const expectedText = await page.evaluate(() => {
+      const elements = document.querySelectorAll('p');
+      for (const el of Array.from(elements)) {
+        const text = el.textContent?.trim();
+        if (text && /^Expected:\s*\d+\s*requests$/.test(text)) {
+          return text;
+        }
+      }
+      return null;
+    });
+    expect(expectedText).toBe("Expected: 6 requests");
+
+    // Click Start and verify the full run: 6 requests complete in ~2.5s
     const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
     await startBtn.click();
 
@@ -513,13 +589,19 @@ test.describe("ReFling E2E Tests", () => {
 
     const finalState = await page.evaluate(() => {
       const engine = (window as any).__engineRef;
-      return engine?.getState();
+      const state = engine?.getState();
+      return {
+        status: state?.status,
+        completedRequests: state?.completedRequests,
+        totalRequests: state?.totalRequests,
+      };
     });
 
     expect(finalState.status).toBe("completed");
-    // Should have completed in approximately 2 seconds (allow some margin)
-    expect(finalState.elapsed).toBeGreaterThanOrEqual(1800);
-    expect(finalState.elapsed).toBeLessThanOrEqual(2500);
+    expect(finalState.completedRequests).toBe(6);
+    expect(finalState.totalRequests).toBe(6);
+    // Last request fires at 2.5s → elapsed ≈ 2.5s
+    expect(finalState.completedRequests).toBe(finalState.totalRequests);
   });
 
   test("2s override progress meter shows correct totalRequests (not fittingRows)", async ({ page }) => {
@@ -536,8 +618,12 @@ test.describe("ReFling E2E Tests", () => {
     // Enable duration override and set to 2 seconds
     const checkbox = page.locator('input[type="checkbox"]');
     await checkbox.check();
-    const durationNumberInput = page.locator('input[type="number"]').first();
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
     await durationNumberInput.fill("2");
+
+    // Set speed to 2× via the preset chip (core scenario: 6 total requests)
+    await page.locator('[data-testid="speed-preset-2"]').click();
+    await page.waitForTimeout(300);
 
     // Click Start
     const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
@@ -563,6 +649,8 @@ test.describe("ReFling E2E Tests", () => {
     expect(finalState.status).toBe("completed");
     // completed should equal totalRequests
     expect(finalState.completedRequests).toBe(finalState.totalRequests);
+    // 2x speed → cycles at 0,1,2s each firing both rows → 6 total
+    expect(finalState.totalRequests).toBe(6);
     // totalRequests should equal activeRows length (engine's source of truth)
     expect(finalState.totalRequests).toBe(finalState.activeRowsLength);
   });
@@ -579,7 +667,7 @@ test.describe("ReFling E2E Tests", () => {
     // Enable duration override and set to 2 seconds
     const checkbox = page.locator('input[type="checkbox"]');
     await checkbox.check();
-    const durationNumberInput = page.locator('input[type="number"]').first();
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
     await durationNumberInput.fill("2");
 
     // Wait for UI to update (but don't click Start)
@@ -597,8 +685,32 @@ test.describe("ReFling E2E Tests", () => {
       return null;
     });
 
-    // Should show "Expected: 4 requests"
+    // Should show "Expected: 4 requests" (default speed 1 → R1,R2,R1,R2 completes
+    // at speed=1: rows at 0,1,2,3s). This pins the completed-cycle regression:
+    // was 3 rows when the in-progress cycle at t=2s was clipped.
     expect(expectedText).toBe("Expected: 4 requests");
+  });
+
+  test("override duration defaults to the loaded CSV span", async ({ page }) => {
+    // Load the 1s-interval CSV (2 rows 1 second apart, span = 1s).
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles("examples/test_1s_interval.csv");
+
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Wait for the App effect to set the default override value
+    await page.waitForTimeout(300);
+
+    // The override duration number input should default to the CSV span (1s),
+    // not a hardcoded 100.
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
+    const defaultValue = await durationNumberInput.inputValue();
+    expect(defaultValue).toBe("1");
+
+    // CSV span readout should confirm 1s
+    await expect(page.locator("p").filter({ hasText: /CSV span: 1s/ })).toBeVisible();
   });
 
   test("1s override on 1s-apart CSV shows 2 bins with correct labels", async ({ page }) => {
@@ -617,7 +729,7 @@ test.describe("ReFling E2E Tests", () => {
     await checkbox.check();
 
     // Set duration value to 1 second
-    const durationNumberInput = page.locator('input[type="number"]').first();
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
     await durationNumberInput.fill("1");
 
     // Ensure unit is "seconds"
@@ -658,7 +770,7 @@ test.describe("ReFling E2E Tests", () => {
     await page.screenshot({ path: `${SCREENSHOT_DIR}/05-one-second-override.png`, fullPage: true });
   });
 
-  test("should have logs toggle button in header", async ({ page }) => {
+  test("should have logs toggle button", async ({ page }) => {
     // Logs toggle button should be visible
     const logsButton = page.locator("[data-testid='logs-toggle-btn']");
     await expect(logsButton).toBeVisible();
@@ -739,5 +851,120 @@ test.describe("ReFling E2E Tests", () => {
 
     // Screenshot: verify app rendered with welcome log visible
     await page.screenshot({ path: `${SCREENSHOT_DIR}/07-welcome-log.png`, fullPage: true });
+  });
+
+  test("CORE: 2s override + 2x speed: chart RPS=[2,2,2], logs match engine, screenshot", async ({ page }) => {
+    // Load the 1s-interval CSV (2 rows 1 second apart)
+    const filePath = "examples/test_1s_interval.csv";
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    await expect(
+      page.locator("h2").filter({ hasText: /Replay Configuration/i }),
+    ).toBeVisible();
+
+    // Enable duration override and set to 2 seconds
+    const checkbox = page.locator('input[type="checkbox"]');
+    await checkbox.check();
+    const durationNumberInput = page.locator('[data-testid="duration-input"]');
+    await durationNumberInput.fill("2");
+
+    // Ensure unit is "seconds"
+    const configSection = page.locator('h2:has-text("Replay Configuration")').locator('..');
+    const unitSelect = configSection.locator('select');
+    const unitValue = await unitSelect.inputValue();
+    if (unitValue !== "seconds") {
+      await unitSelect.selectOption("seconds");
+    }
+
+    // Set speed to 2× via the preset chip
+    await page.locator('[data-testid="speed-preset-2"]').click();
+
+    // Wait for timeseries to update
+    await page.waitForTimeout(500);
+
+    // === CHECK 1: Chart shows RPS = [2, 2, 2] → 2 RPS per 1s bin ===
+    const chartData = await page.evaluate(() => {
+      const chart = window["__chartInstance"];
+      if (!chart || !chart.data) return null;
+      return {
+        labels: [...chart.data.labels],
+        datasets: chart.data.datasets.map((ds: any) => ({
+          label: ds.label,
+          data: [...ds.data],
+        })),
+      };
+    });
+
+    expect(chartData).not.toBeNull();
+    expect(chartData!.labels.length).toBe(3);
+    expect(chartData!.labels[0]).toBe("0.0s");
+    expect(chartData!.labels[1]).toBe("1.0s");
+    expect(chartData!.labels[2]).toBe("2.0s");
+    // Critical: RPS should be [2, 2, 2] — 6 total across 3 bins = 2 RPS
+    expect(chartData!.datasets[0].data).toEqual([2, 2, 2]);
+
+    // Screenshot: chart with correct RPS before replay
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/08-chart-rps-2-2-2.png`, fullPage: true });
+
+    // === CHECK 2: Open logs and verify they show correct request sequence ===
+    const logsButton = page.locator("[data-testid='logs-toggle-btn']");
+    await logsButton.click();
+
+    const logsPanel = page.locator('[data-testid="logs-panel"]');
+    await expect(logsPanel).toBeVisible();
+
+    // Get all log entries
+    const logEntries = await logsPanel.locator('div.break-all').allTextContents();
+    // Find the requests log line (last entry, emitted after the speed change)
+    const requestLog = logEntries.filter(line => line.includes("requests:")).pop();
+    expect(requestLog).toBeDefined();
+
+    // Parse the JSON array from the log line (format: "requests: [{...}, ...]")
+    const colonIdx = requestLog!.indexOf("requests:");
+    expect(colonIdx).toBeGreaterThan(-1);
+    const requests = JSON.parse(requestLog!.slice(colonIdx + 9).trim());
+
+    // Should have 6 requests: t=0, .5, 1.0, 1.5, 2.0, 2.5 (completed cycles)
+    expect(requests.length).toBe(6);
+    expect(requests[0].timing).toBe("0.00s");
+    expect(requests[1].timing).toBe("0.50s");
+    expect(requests[2].timing).toBe("1.00s");
+    expect(requests[3].timing).toBe("1.50s");
+    expect(requests[4].timing).toBe("2.00s");
+    expect(requests[5].timing).toBe("2.50s");
+
+    // === CHECK 3: Start replay and verify engine state ===
+    await logsButton.click(); // close logs
+
+    const startBtn = page.locator("button").filter({ hasText: /^Start$/i });
+    await startBtn.click();
+
+    await page.waitForFunction(() => {
+      const engine = (window as any).__engineRef;
+      return engine?.getState()?.status === 'completed';
+    }, { timeout: 5000 });
+
+    const finalState = await page.evaluate(() => {
+      const engine = (window as any).__engineRef;
+      const state = engine?.getState();
+      return {
+        status: state?.status,
+        completedRequests: state?.completedRequests,
+        totalRequests: state?.totalRequests,
+        activeRowsLength: state?.activeRows?.length,
+        elapsed: state?.elapsed,
+      };
+    });
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.completedRequests).toBe(finalState.totalRequests);
+    expect(finalState.totalRequests).toBe(6); // 6 active rows (completed cycles)
+    // Last row fires at 2.5s → elapsed ≈ 2.5s (allow CI margin)
+    expect(finalState.elapsed).toBeGreaterThanOrEqual(2300);
+    expect(finalState.elapsed).toBeLessThanOrEqual(3200);
+
+    // Screenshot: after replay completes
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/09-replay-completed.png`, fullPage: true });
   });
 });

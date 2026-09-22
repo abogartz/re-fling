@@ -35,4 +35,4 @@ new BrowserWindow({
 	},
 });
 
-console.warn("React Tailwind Vite app started!");
+console.warn("ReFling app started!");

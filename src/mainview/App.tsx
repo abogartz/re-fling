@@ -13,6 +13,7 @@ import { ColumnMapping } from "../features/columns/ColumnMapping";
 import { LogsPanel } from "../features/logs/LogsPanel";
 import { useLogs } from "../features/logs/useLogs";
 import { TimeseriesChart } from "./TimeseriesChart";
+import replayIcon from "../ui/replay.svg?raw";
 
 function App() {
   const csv = useCsvLoad();
@@ -31,23 +32,34 @@ function App() {
   const durationValue = useAppStore((s) => s.durationValue);
   const durationUnit = useAppStore((s) => s.durationUnit);
   const setPreviewStats = useAppStore((s) => s.setPreviewStats);
+  const setActualDurationMs = useAppStore((s) => s.setActualDurationMs);
+  const setDurationValue = useAppStore((s) => s.setDurationValue);
+  const setDurationUnit = useAppStore((s) => s.setDurationUnit);
 
   // Recalculate timeseries when parsed data changes
   useEffect(() => {
     if (!csv.parsedData) {
       return;
     }
+
+    const csvDur = calculateActualDuration(csv.parsedData.data);
+    if (csv.parsedData.data.length > 0) {
+      setActualDurationMs(csvDur);
+      // Override duration defaults to the length of the loaded CSV.
+      setDurationValue(Math.max(1, Math.ceil(csvDur / 1000)));
+      setDurationUnit("seconds");
+    }
+
     const state = useAppStore.getState();
     const result = recalcPreviewStats(csv.parsedData.data, state);
     setPreviewStats(result.timeseries, result.totalRequests);
 
     if (csv.parsedData.data.length > 0) {
-      const effectiveDuration =
-        getEffectiveDurationMs(
-          state.durationEnabled,
-          state.durationValue,
-          state.durationUnit,
-        ) || calculateActualDuration(csv.parsedData.data);
+      const effectiveDuration = getEffectiveDurationMs(
+        state.durationEnabled,
+        state.durationValue,
+        state.durationUnit,
+      );
       addLog(formatRequestsForLog(csv.parsedData.data, state.speed, effectiveDuration));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -65,7 +77,7 @@ function App() {
           state.durationEnabled,
           state.durationValue,
           state.durationUnit,
-        ) || calculateActualDuration(csv.parsedData.data);
+        );
 
       if (state.durationEnabled) {
         addLog(formatRequestsForLog(csv.parsedData.data, speedVal, effectiveDuration));
@@ -82,8 +94,7 @@ function App() {
     [csv.parsedData, setPreviewStats],
   );
 
-  const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newSpeed = parseFloat(e.target.value) || 1;
+  const handleSpeedChange = (newSpeed: number) => {
     useAppStore.getState().setSpeed(newSpeed);
     updateTimeseriesAndLog(newSpeed);
   };
@@ -126,9 +137,7 @@ function App() {
     const config = {
       speed,
       duration:
-        effectiveDurationMs > 0
-          ? effectiveDurationMs
-          : calculateActualDuration(csv.parsedData.data),
+        effectiveDurationMs > 0 ? effectiveDurationMs : 0,
       baseUrl: filt.baseUrl,
       filterPatterns: filt.filterPatterns
         .split(",")
@@ -146,21 +155,19 @@ function App() {
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div>
-          <h1 className="text-lg font-bold text-white">ReFling</h1>
+          <h1 className="text-lg font-bold text-white flex items-center gap-1.5">
+            <span
+              className="inline-flex w-5 h-5 text-gray-400"
+              data-testid="app-icon"
+              dangerouslySetInnerHTML={{ __html: replayIcon }}
+            />
+            ReFling
+          </h1>
           <p className="text-gray-400 text-xs">
             Replay historical traffic patterns exactly as they occurred.
           </p>
         </div>
       </div>
-
-      {/* Logs Toggle Button */}
-      <button
-        onClick={logs.toggleVisible}
-        data-testid="logs-toggle-btn"
-        className="bg-[#252525] border border-gray-700 rounded-lg px-3 py-1.5 hover:bg-[#333] transition-colors text-xs text-gray-300 mb-2"
-      >
-        {logs.visible ? "Hide Logs" : "Show Logs"} ({logs.entries.length})
-      </button>
 
       <div className="max-w-4xl mx-auto">
         {/* CSV Loader */}

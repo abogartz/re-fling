@@ -8,11 +8,13 @@ interface DurationControlsProps {
   durationValue: number;
   durationUnit: DurationUnit;
   actualDurationMs: number;
-  onSpeedChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onSpeedChange: (speed: number) => void;
   onDurationEnabledChange: (checked: boolean) => void;
   onDurationValueChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onDurationUnitChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
 }
+
+const SPEED_PRESETS = [0.5, 1, 2, 3];
 
 export function DurationControls({
   speed,
@@ -32,15 +34,41 @@ export function DurationControls({
           <label className="block text-[10px] font-medium text-gray-300 mb-0.5">
             Speed
           </label>
-          <input
-            type="range"
-            min="0.1"
-            max="3"
-            step="0.1"
-            value={speed}
-            onChange={onSpeedChange}
-            className="w-full h-3"
-          />
+          <div className="flex gap-1 items-center">
+            {SPEED_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                data-testid={`speed-preset-${preset}`}
+                onClick={() => onSpeedChange(preset)}
+                className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                  speed === preset
+                    ? "bg-blue-600 border-blue-600 text-white"
+                    : "bg-[#333] border-gray-600 text-gray-300 hover:bg-[#3d3d3d]"
+                }`}
+              >
+                {preset}×
+              </button>
+            ))}
+            <span className="flex-1 flex items-center gap-1 ml-1">
+              <input
+                type="number"
+                data-testid="speed-input"
+                min="0.1"
+                max="10"
+                step="0.1"
+                value={speed}
+                onChange={(e) => {
+                  const value = parseFloat(e.target.value);
+                  if (!isNaN(value) && value > 0) {
+                    onSpeedChange(value);
+                  }
+                }}
+                className="w-16 border border-gray-600 bg-[#1a1a1a] text-white rounded px-1.5 py-0.5 text-xs"
+              />
+              <span className="text-[10px] text-gray-400">×</span>
+            </span>
+          </div>
         </div>
         <div className="flex-1">
           <label className="flex items-center gap-1 text-[10px] font-medium text-gray-300 mb-0.5">
@@ -55,6 +83,7 @@ export function DurationControls({
           <div className="flex gap-1">
             <input
               type="number"
+              data-testid="duration-input"
               min="1"
               disabled={!durationEnabled}
               value={durationValue}

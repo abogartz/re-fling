@@ -7,99 +7,112 @@ export interface BuildActiveRowsConfig {
 
 export interface BuildActiveRowsResult {
   activeRows: CSVRow[];
-  delayMs: number;
+  rowDelays: number[];
+  durationMs: number;
 }
 
 /**
- * Build an array of rows that fits the target duration.
- * - If CSV span > duration: crop to first N rows whose cumulative time <= duration
- * - If CSV span < duration: repeat (cycle) the array until it fills the duration,
- *   preserving original inter-row gaps and adding average inter-row gap between cycles
+ * Build the replay schedule for the target window.
+ *
+ * Pacing rule: every inter-row delay is the ORIGINAL gap divided by speed
+ * (1s gap at 2x = 0.5s). The window is the duration override if set,
+ * otherwise the speed-scaled CSV span (natural duration = span / speed).
+ *
+ * Repeating: when the natural scaled duration is shorter than the window,
+ * cycles restart after the tightest original inter-row gap (scaled by speed),
+ * so the whole window fills with gaps that all exist in the source data.
+ * A cycle whose first row starts within the window is played to COMPLETION —
+ * trailing rows may land past the nominal window end so the underlying rate
+ * stays legible (e.g. a 1s-apart pair at 2x over 2s yields 6 rows at 0, .5,
+ * 1.0, 1.5, 2.0, 2.5s = flat 2 RPS).
+ * Cropping: when the natural duration exceeds the window, only rows whose
+ * scaled offset fits inside the window fire (a row at exactly the window
+ * boundary is included); the in-progress pass is not completed.
+ *
+ * Row datetimes are shifted to encode the planned wall-clock offset from the
+ * first row, so the engine, chart, and logs all read the same schedule.
+ * Each row also knows the delay to the next fire (rowDelays[i] = ms until the
+ * next row; the last entry is always 0).
  */
 export function buildActiveRows(
   rows: CSVRow[],
   config: BuildActiveRowsConfig,
 ): BuildActiveRowsResult {
+  const speed = config.speed && config.speed > 0 ? config.speed : 1;
+
   if (rows.length === 0) {
-    return { activeRows: [], delayMs: 0 };
+    return { activeRows: [], rowDelays: [], durationMs: 0 };
   }
 
-  const targetDuration =
-    config.duration ?? calculateActualDuration(rows);
-  if (targetDuration <= 0 || rows.length === 1) {
-    return { activeRows: [...rows], delayMs: 0 };
+  const base = new Date(rows[0].datetime).getTime();
+  const span = calculateActualDuration(rows);
+  const naturalDurationMs = span / speed;
+  const durationMs =
+    config.duration && config.duration > 0 ? config.duration : naturalDurationMs;
+
+  if (rows.length === 1) {
+    return {
+      activeRows: [{ ...rows[0], datetime: new Date(base) }],
+      rowDelays: [0],
+      durationMs,
+    };
   }
 
-  const csvSpan = calculateActualDuration(rows);
+  // Speed-scaled offsets of each row from the first row.
+  const offsets = rows.map((row) => (new Date(row.datetime).getTime() - base) / speed);
 
-  if (csvSpan < targetDuration) {
-    // CSV is shorter than target → repeat/cycle to fill duration.
-    // Preserve internal gaps within each cycle; add uniform gap between cycles.
-    // Gap = average gap from original CSV, adjusted for speed.
-    const avgGap = csvSpan > 0 ? csvSpan / (rows.length - 1) : 0;
-    const effectiveGap = avgGap / (config.speed ?? 1);
+  // Tightest original inter-row gap → cycle restart gap (scaled).
+  let minGap = Infinity;
+  for (let i = 1; i < rows.length; i++) {
+    const gap = new Date(rows[i].datetime).getTime() - new Date(rows[i - 1].datetime).getTime();
+    if (gap < minGap) {
+      minGap = gap;
+    }
+  }
+  const wrapGap = Math.max(0, minGap === Infinity ? 0 : minGap) / speed;
+  // Distance between the first row of one cycle and the first row of the next
+  // (scaled span + scaled wrap gap — both in the playback time domain).
+  const cycleAdvance = naturalDurationMs + wrapGap;
 
-    const firstRowTime = new Date(rows[0].datetime).getTime();
-    const activeRows: CSVRow[] = [];
+  const activeRows: CSVRow[] = [];
+
+  // Repeat: emit complete cycles while a cycle's first row starts within the
+  // window. Each started cycle fires every source row (gaps preserved), so the
+  // final cycle can extend a little past the nominal window end.
+  if (naturalDurationMs < durationMs) {
     let cycleOffset = 0;
-    const cycleAdvance = csvSpan + effectiveGap;
-
-    while (true) {
-      // No more cycles can fit if the offset itself exceeds target
-      if (cycleOffset > targetDuration) {
-        break;
+    while (cycleOffset <= durationMs) {
+      for (let i = 0; i < rows.length; i++) {
+        activeRows.push({
+          ...rows[i],
+          datetime: new Date(base + Math.round(offsets[i] + cycleOffset)),
+        });
       }
-      let cycleExceedsTarget = false;
-      for (const row of rows) {
-        const rowTime = new Date(row.datetime).getTime();
-        const relativeTime = rowTime - firstRowTime;
-        const shiftedTime = relativeTime + cycleOffset;
-        if (shiftedTime > targetDuration) {
-          cycleExceedsTarget = true;
-          break;
-        }
-        const shiftedRow: CSVRow = {
-          ...row,
-          datetime: new Date(firstRowTime + shiftedTime),
-        };
-        activeRows.push(shiftedRow);
-      }
-
-      if (cycleExceedsTarget) {
-        break;
-      }
-
-      // Advance offset for next cycle: original span + gap
-      // Guard against zero-advance (csvSpan=0, avgGap=0) to prevent infinite loop
       if (cycleAdvance <= 0) {
         break;
       }
       cycleOffset += cycleAdvance;
     }
-
-    const delayMs = activeRows.length > 1 ? targetDuration / (activeRows.length - 1) : 0;
-    return { activeRows, delayMs };
-  }
-
-  // CSV is longer than or equal to target → crop rows that fit within duration
-  const firstTime = new Date(rows[0].datetime).getTime();
-  const cutoff = firstTime + targetDuration;
-  const cropped: CSVRow[] = [];
-  for (const row of rows) {
-    const t = new Date(row.datetime).getTime();
-    if (t <= cutoff) {
-      cropped.push(row);
-    } else if (t > cutoff + 1) {
-      break;
+  } else {
+    // Single pass (crop / exact fit): fire rows up to the window boundary.
+    for (let i = 0; i < rows.length; i++) {
+      if (offsets[i] > durationMs) {
+        break;
+      }
+      activeRows.push({ ...rows[i], datetime: new Date(base + Math.round(offsets[i])) });
     }
   }
 
-  if (cropped.length === 0) {
-    return { activeRows: [rows[0]], delayMs: 0 };
-  }
+  const rowDelays = activeRows.map((row, i) => {
+    if (i === activeRows.length - 1) {
+      return 0;
+    }
+    const current = new Date(row.datetime).getTime();
+    const next = new Date(activeRows[i + 1].datetime).getTime();
+    return Math.max(0, next - current);
+  });
 
-  const delayMs = cropped.length > 1 ? targetDuration / (cropped.length - 1) : 0;
-  return { activeRows: cropped, delayMs };
+  return { activeRows, rowDelays, durationMs };
 }
 
 function calculateActualDuration(data: CSVRow[]): number {

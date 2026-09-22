@@ -11,3 +11,4 @@ test-results
 playwright-report
 specs
 Modelfile
+.DS_Store

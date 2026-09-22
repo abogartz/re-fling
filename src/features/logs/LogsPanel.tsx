@@ -17,6 +17,7 @@ export function LogsPanel({
     <>
       <button
         onClick={onToggle}
+        data-testid="logs-toggle-btn"
         title="Toggle logs"
         className="bg-[#252525] border border-gray-700 rounded-lg px-3 py-1.5 hover:bg-[#333] transition-colors text-xs text-gray-300"
       >

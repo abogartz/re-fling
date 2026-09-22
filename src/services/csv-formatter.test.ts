@@ -43,13 +43,13 @@ describe("formatRequestsForLog", () => {
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "/api/a" },
       { datetime: new Date("2024-01-01T10:00:10Z"), url: "/api/b" },
     ];
-    // CSV span = 10s, duration=5s → repeatCount = ceil(5/10) = 1
+    // CSV span = 10s, duration=5s → buildActiveRows crops to first row fitting within 5s
     const result = formatRequestsForLog(data, 1, 5000);
 
     expect(result).toContain("requests:");
-    // Both rows should appear in the output
     const parsed = JSON.parse(result.replace("requests: ", ""));
-    expect(parsed).toHaveLength(2);
+    // Only row at t=0 fits within 5s target
+    expect(parsed).toHaveLength(1);
   });
 
   test("repeats requests when duration exceeds CSV span", () => {
@@ -57,11 +57,13 @@ describe("formatRequestsForLog", () => {
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "/api/a" },
       { datetime: new Date("2024-01-01T10:00:05Z"), url: "/api/b" },
     ];
-    // CSV span = 5s, duration=15s → repeatCount = ceil(15/5) = 3
+    // CSV span = 5s, avgGap = 5s. cycleInterval = 5s + 5s = 10s.
+    // Cycle0: [t=0, t=5000]. Cycle1: offset=10000, row0=10000 (≤15000), row1=15000 (not >15000) → included.
+    // Total: 4 rows.
     const result = formatRequestsForLog(data, 1, 15000);
 
     const parsed = JSON.parse(result.replace("requests: ", ""));
-    expect(parsed).toHaveLength(6); // 2 rows × 3 repeats
+    expect(parsed).toHaveLength(4);
   });
 
   test("handles duration=0 by using CSV span", () => {
@@ -81,13 +83,12 @@ describe("formatRequestsForLog", () => {
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "/api/a" },
       { datetime: new Date("2024-01-01T10:00:10Z"), url: "/api/b" },
     ];
+    // CSV span = 10s, duration=8s → buildActiveRows crops to first row fitting within 8s
     const result = formatRequestsForLog(data, 1, 8000);
 
     const parsed = JSON.parse(result.replace("requests: ", ""));
-    expect(parsed).toHaveLength(2);
-    // Original gap preserved: 10s between rows
+    expect(parsed).toHaveLength(1);
     expect(parsed[0].timing).toBe("0.00s");
-    expect(parsed[1].timing).toBe("10.00s");
   });
 
   test("output is valid JSON-parseable format", () => {
@@ -114,10 +115,10 @@ describe("formatRequestsForLog", () => {
     expect(parsed[0]).toHaveProperty("timing");
   });
 
-  test("EXPOSES BUG: timing between cycles includes gap (avg inter-row gap)", () => {
-    // 2 rows spanning 5s (gap=5s). Duration=15000ms → 3 repeats.
-    // With gap between cycles (avg gap = 5s), cycle 1 should start at 10s (5s span + 5s gap).
-    // Current bug: cycles placed back-to-back at 0s, 5s, 10s instead of 0s, 10s, 20s.
+  test("cycles with avg-gap between cycles", () => {
+    // 2 rows spanning 5s (gap=5s). Duration=15000ms.
+    // avgGap = 5s/1 = 5s. cycleInterval = 5s + 5s = 10s.
+    // Cycle0: [t=0, t=5000]. Cycle1: offset=10000, row0=10000 (≤15000), row1=15000 (not >15000) → 4 total.
     const data = [
       { datetime: new Date("2024-01-01T10:00:00Z"), url: "/a" },
       { datetime: new Date("2024-01-01T10:00:05Z"), url: "/b" },
@@ -125,14 +126,13 @@ describe("formatRequestsForLog", () => {
     const result = formatRequestsForLog(data, 1, 15000);
     const parsed = JSON.parse(result.replace("requests: ", ""));
 
-    // Should have 6 rows (2 × 3 cycles)
-    expect(parsed).toHaveLength(6);
+    // Should have 4 rows (cycle0 + partial cycle1)
+    expect(parsed).toHaveLength(4);
 
     // Check timing shows gap between cycles:
     // Cycle 0: 0.00s, 5.00s
-    // Cycle 1: should be ~10.00s, ~15.00s (5s span + 5s avg gap)
-    // Current bug: cycle 1 starts at 5.00s (back-to-back), not 10.00s
-    expect(parsed[2].timing).toBe("10.00s"); // Row 0 of cycle 1
-    expect(parsed[3].timing).toBe("15.00s"); // Row 1 of cycle 1
+    // Cycle 1: 10.00s, 15.00s (5s span + 5s avg gap)
+    expect(parsed[2].timing).toBe("10.00s");
+    expect(parsed[3].timing).toBe("15.00s");
   });
 });

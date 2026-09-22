@@ -92,6 +92,14 @@ describe("Filters", () => {
     expect(inputs).toHaveLength(2);
   });
 
+  test("provides tooltips explaining both filter inputs", () => {
+    render(<Filters {...defaultProps} />);
+    const baseUrlInput = screen.getByPlaceholderText("Base URL");
+    const filterInput = screen.getByPlaceholderText("Filter patterns");
+    expect(baseUrlInput).toHaveAttribute("title", expect.stringContaining("base URL"));
+    expect(filterInput).toHaveAttribute("title", expect.stringContaining("excluded"));
+  });
+
   test("handles rapid input changes", () => {
     render(<Filters {...defaultProps} />);
     const input = screen.getByPlaceholderText("Base URL");

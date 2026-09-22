@@ -17,6 +17,7 @@ export interface CsvActions {
   setRawText: (text: string | null) => void;
   setRawParsed: (parsed: ParsedCSV | null) => void;
   setParsedData: (data: ParsedCSV | null) => void;
+  setActualDurationMs: (actualDurationMs: number) => void;
   setColumnMapping: (mapping: ColumnMapping) => void;
   setError: (error: string | null) => void;
   resetCsv: () => void;
@@ -76,6 +77,7 @@ export interface ReplayActions {
   startReplay: (data: CSVRow[], config: ReplayConfig) => void;
   stopReplay: () => void;
   updateFromEngine: (state: Partial<ReplayState>) => void;
+  setActualDurationMs: (actualDurationMs: number) => void;
   setPreviewStats: (timeseries: { timestamps: number[]; rpsValues: number[] }, totalRequests: number) => void;
 }
 
@@ -111,7 +113,7 @@ const initialState: AppState = {
   config: null,
   engineRef: null,
   activeRows: [],
-  delayMs: 0,
+  rowDelays: [],
   filteredData: [],
   progress: 0,
   totalRequests: 0,
@@ -129,6 +131,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   setRawText: (rawText) => set({ rawText }),
   setRawParsed: (rawParsed) => set({ rawParsed }),
   setParsedData: (parsedData) => set({ parsedData }),
+  setActualDurationMs: (actualDurationMs) => set({ actualDurationMs }),
   setColumnMapping: (columnMapping) => set({ columnMapping }),
   setError: (error) => set({ error }),
   resetCsv: () => set({ rawText: null, rawParsed: null, parsedData: null, columnMapping: {}, error: null }),
@@ -176,7 +179,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       status: state.status ?? prev.status,
       config: state.config ?? prev.config,
       activeRows: state.activeRows ?? prev.activeRows,
-      delayMs: state.delayMs ?? prev.delayMs,
+      rowDelays: state.rowDelays ?? prev.rowDelays,
       filteredData: state.filteredData ?? prev.filteredData,
       progress: state.progress ?? prev.progress,
       totalRequests: state.totalRequests ?? prev.totalRequests,

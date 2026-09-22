@@ -20,7 +20,7 @@ export interface ReplayState {
   status: "idle" | "running" | "paused" | "completed" | "cancelled" | "error";
   config?: ReplayConfig;
   activeRows: CSVRow[];
-  delayMs: number;
+  rowDelays: number[];
   filteredData: CSVRow[];
   progress: number;
   totalRequests: number;
@@ -38,7 +38,6 @@ export type ProgressCallback = (state: ReplayState) => void;
 // --- Engine ---
 
 export class ReplayEngine {
-  private csvData: CSVRow[] = [];
   private config: ReplayConfig | null = null;
   private state: ReplayState;
   private onProgress?: ProgressCallback;
@@ -48,7 +47,6 @@ export class ReplayEngine {
   private filteredRows: CSVRow[] = [];
   private currentRow: number = 0;
   private actualDurationMs: number = 0; // Time span of the CSV data in ms
-  private filteredDataForActiveRows: CSVRow[] = [];
 
   constructor() {
     this.state = this.getInitialState();
@@ -59,7 +57,7 @@ export class ReplayEngine {
       status: "idle",
       config: { speed: 1, duration: 0, baseUrl: "", filterPatterns: [] },
       activeRows: [],
-      delayMs: 0,
+      rowDelays: [],
       filteredData: [],
       progress: 0,
       totalRequests: 0,
@@ -72,13 +70,15 @@ export class ReplayEngine {
   }
 
   setData(data: CSVRow[], config: ReplayConfig): void {
-    this.csvData = data;
     this.actualDurationMs = calculateActualDuration(data);
 
-    // Auto-set duration to actual CSV span if not provided or zero
+    const speed = config.speed && config.speed > 0 ? config.speed : 1;
+
+    // Auto-set duration to the speed-scaled CSV span when not provided or zero.
     const effectiveConfig = {
       ...config,
-      duration: config.duration && config.duration > 0 ? config.duration : this.actualDurationMs,
+      speed,
+      duration: config.duration && config.duration > 0 ? config.duration : this.actualDurationMs / speed,
     };
 
     this.config = effectiveConfig;
@@ -88,20 +88,21 @@ export class ReplayEngine {
       ...row,
       url: this.resolveBaseUrl(row),
     }));
-    this.filteredDataForActiveRows = [...this.filteredRows];
 
-    // Pre-calculate active rows that fit within the target duration.
-    // Crop if too long, repeat if too short.
-    const { activeRows, delayMs } = buildActiveRows(this.filteredRows, {
+    // Pre-calculate the play schedule that fits the target window.
+    // Delays are original gaps / speed; short data repeats to fill the window.
+    const { activeRows, rowDelays } = buildActiveRows(this.filteredRows, {
       speed: effectiveConfig.speed,
       duration: effectiveConfig.duration,
     });
+
+    this.currentRow = 0;
 
     this.state = {
       ...this.getInitialState(),
       config: effectiveConfig,
       activeRows,
-      delayMs,
+      rowDelays,
       filteredData: [...this.filteredRows],
       totalRequests: activeRows.length,
       timeseries: this.buildTimeseriesForRows(activeRows, effectiveConfig),
@@ -167,41 +168,25 @@ export class ReplayEngine {
       return { timestamps: [], rpsValues: [] };
     }
 
-    // Calculate effective playback duration (accounts for speed)
-    const effectiveDurationMs = targetDuration / (config.speed ?? 1);
-    
-    // Determine time bins (1 second intervals)
-    const binSizeMs = 1000; // 1 second bins
-    const totalBins = Math.floor(effectiveDurationMs / binSizeMs) + 1;
-    
-    // Calculate RPS for each bin based on actual activeRows timing
-    const rpsValues: number[] = [];
-    const timestamps: number[] = [];
-    
-    // Get the first row's time as reference point
+    // Time bins (1 second intervals) across the effective window.
+    const binSizeMs = 1000;
+    const totalBins = Math.floor(targetDuration / binSizeMs) + 1;
+
+    const rpsValues: number[] = new Array(totalBins).fill(0);
+    const timestamps: number[] = Array.from({ length: totalBins }, (_, i) => i * binSizeMs);
+
+    // Shifted row datetimes already encode the planned wall-clock offset.
+    // Rows from a completed cycle can land past the nominal window end; clamp
+    // them into the final bin so the chart total always equals totalRequests.
     const firstRowTime = new Date(activeRows[0].datetime).getTime();
-    
-    for (let i = 0; i < totalBins; i++) {
-      const binStart = i * binSizeMs;
-      const binEnd = (i + 1) * binSizeMs;
-      
-      // Count requests that fall in this time bin
-      let countInBin = 0;
-      for (const row of activeRows) {
-        const rowTime = new Date(row.datetime).getTime();
-        // Calculate playback time as offset from first row, scaled by speed
-        const offsetFromFirst = rowTime - firstRowTime;
-        const playbackTime = offsetFromFirst / (config.speed ?? 1);
-        
-        if (playbackTime >= binStart && playbackTime < binEnd) {
-          countInBin++;
-        }
+    for (const row of activeRows) {
+      const rowTime = new Date(row.datetime).getTime();
+      const bin = Math.min(Math.floor((rowTime - firstRowTime) / binSizeMs), totalBins - 1);
+      if (bin >= 0 && bin < totalBins) {
+        rpsValues[bin]++;
       }
-      
-      rpsValues.push(countInBin);
-      timestamps.push(binStart);
     }
-    
+
     return { timestamps, rpsValues };
   }
 
@@ -285,11 +270,11 @@ export class ReplayEngine {
     };
     this.emit();
 
-    // Uniform delay between rows (pre-calculated)
-    const nextDelay = this.state.delayMs;
-    if (nextDelay > 0 && this.currentRow < activeRows.length) {
+    // Delay until the next row (pre-calculated from the original gaps / speed).
+    const nextDelay = this.state.rowDelays[this.currentRow - 1] ?? 0;
+    if (this.currentRow < activeRows.length) {
       this.timerId = setTimeout(() => this.tick(), nextDelay);
-    } else if (this.currentRow >= activeRows.length) {
+    } else {
       // Last row fired — complete on next tick
       this.timerId = setTimeout(() => this.tick(), 1);
     }

@@ -1,6 +1,6 @@
 import { CSVRow } from "../csv/parser";
-import { calculateActualDuration, getEffectiveDurationMs } from "./duration";
-
+import { getEffectiveDurationMs } from "./duration";
+import { buildActiveRows } from "./buildActiveRows";
 
 export interface TimeseriesResult {
   timestamps: number[];
@@ -19,44 +19,47 @@ export type DurationConfig = {
   durationUnit: "seconds" | "minutes" | "hours";
 };
 
+/**
+ * Build active rows matching engine behavior, then bin into 1s RPS intervals.
+ * This ensures chart, logs, and totalRequests all agree on the same data.
+ */
 export function calculateExpectedTimeseries(
   data: CSVRow[],
   durationMs: number,
   speed: number,
 ): TimeseriesResult {
-  if (data.length === 0 || durationMs === 0) {
+  if (data.length === 0) {
     return { timestamps: [], rpsValues: [] };
   }
 
-  // Work with raw data directly (no repetition/cropping) — timeseries previews original pattern
-  const csvDuration = calculateActualDuration(data);
-  const effectiveDurationMs = durationMs / speed;
+  // Build active rows exactly like the engine does (single source of truth for
+  // offsets, cycles, and the effective window).
+  const { activeRows, durationMs: windowMs } = buildActiveRows(data, {
+    speed,
+    duration: durationMs,
+  });
+
+  if (activeRows.length === 0 || windowMs <= 0) {
+    return { timestamps: [], rpsValues: [] };
+  }
+
+  // Determine time bins (1 second intervals) across the effective window.
   const binSizeMs = 1000;
-  const totalBins = Math.floor(effectiveDurationMs / binSizeMs) + 1;
+  const totalBins = Math.floor(windowMs / binSizeMs) + 1;
+  const timestamps: number[] = Array.from({ length: totalBins }, (_, i) => i * binSizeMs);
 
-  const rpsValues: number[] = [];
-  const timestamps: number[] = [];
-  const firstRowTime = new Date(data[0].datetime).getTime();
+  const rpsValues: number[] = new Array(totalBins).fill(0);
+  const firstRowTime = new Date(activeRows[0].datetime).getTime();
 
-  for (let i = 0; i < totalBins; i++) {
-    const binStart = i * binSizeMs;
-    const binEnd = (i + 1) * binSizeMs;
-
-    let countInBin = 0;
-    for (const row of data) {
-      const rowTime = new Date(row.datetime).getTime();
-      const offsetFromFirst = rowTime - firstRowTime;
-      // When all rows share the same timestamp, csvDuration=0 → all land in bin0
-      const playbackTime =
-        csvDuration > 0 ? offsetFromFirst * effectiveDurationMs / csvDuration : 0;
-
-      if (playbackTime >= binStart && playbackTime < binEnd) {
-        countInBin++;
-      }
+  // Shifted row datetimes already encode the planned wall-clock offset.
+  // Rows from a completed cycle can land past the nominal window end; clamp
+  // them into the final bin so the chart total always equals totalRequests.
+  for (const row of activeRows) {
+    const rowTime = new Date(row.datetime).getTime();
+    const bin = Math.min(Math.floor((rowTime - firstRowTime) / binSizeMs), totalBins - 1);
+    if (bin >= 0 && bin < totalBins) {
+      rpsValues[bin]++;
     }
-
-    rpsValues.push(countInBin);
-    timestamps.push(binStart);
   }
 
   return { timestamps, rpsValues };
@@ -66,22 +69,18 @@ export function recalcPreviewStats(
   data: CSVRow[],
   config: DurationConfig,
 ): PreviewStats {
-  const csvDuration = calculateActualDuration(data);
   const overrideMs = getEffectiveDurationFromConfig(config);
-  const effectiveDuration = overrideMs > 0 ? overrideMs : csvDuration;
-  const ts = calculateExpectedTimeseries(data, effectiveDuration, config.speed);
 
-  // Preview totalRequests: count rows fitting within effectiveDuration (no inter-cycle gap)
-  const fullCycles = csvDuration > 0 ? Math.floor(effectiveDuration / csvDuration) : 0;
-  const remainingMs = csvDuration > 0 ? effectiveDuration % csvDuration : 0;
-  const firstTime = data.length > 0 ? new Date(data[0].datetime).getTime() : 0;
-  const partialRows =
-    remainingMs > 0
-      ? data.filter((r) => new Date(r.datetime).getTime() - firstTime <= remainingMs).length
-      : 0;
-  const totalRequests = fullCycles * data.length + partialRows;
+  // Build active rows exactly like engine does — this is the source of truth.
+  // duration 0 → natural speed-scaled window (span / speed).
+  const { activeRows } = buildActiveRows(data, {
+    speed: config.speed,
+    duration: overrideMs > 0 ? overrideMs : 0,
+  });
 
-  return { timeseries: ts, totalRequests };
+  const ts = calculateExpectedTimeseries(data, overrideMs > 0 ? overrideMs : 0, config.speed);
+
+  return { timeseries: ts, totalRequests: activeRows.length };
 }
 
 function getEffectiveDurationFromConfig(config: DurationConfig): number {
@@ -91,5 +90,3 @@ function getEffectiveDurationFromConfig(config: DurationConfig): number {
     config.durationUnit,
   );
 }
-
-

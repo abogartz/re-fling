@@ -30,16 +30,26 @@ describe("DurationControls", () => {
     expect(screen.getByText("Override Duration")).toBeInTheDocument();
   });
 
-  test("renders speed slider input", () => {
+  test("renders speed preset chips", () => {
     render(<DurationControls {...defaultProps} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    expect(slider).toBeInTheDocument();
-    expect(slider.value).toBe("1");
+    expect(screen.getByTestId("speed-preset-0.5")).toBeInTheDocument();
+    expect(screen.getByTestId("speed-preset-1")).toBeInTheDocument();
+    expect(screen.getByTestId("speed-preset-2")).toBeInTheDocument();
+    expect(screen.getByTestId("speed-preset-3")).toBeInTheDocument();
+  });
+
+  test("renders speed value in the free-form number input", () => {
+    render(<DurationControls {...defaultProps} />);
+    const speedInput = document.querySelector(
+      'input[type="number"][data-testid="speed-input"]',
+    ) as HTMLInputElement;
+    expect(speedInput).toBeInTheDocument();
+    expect(speedInput.value).toBe("1");
   });
 
   test("renders duration value number input", () => {
     render(<DurationControls {...defaultProps} />);
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     expect(numberInput).toBeInTheDocument();
     expect(numberInput.value).toBe("100");
   });
@@ -51,11 +61,19 @@ describe("DurationControls", () => {
     expect(select.value).toBe("seconds");
   });
 
-  test("calls onSpeedChange when slider changes", () => {
+  test("calls onSpeedChange with 2 when the 2× preset is clicked", () => {
     render(<DurationControls {...defaultProps} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    fireEvent.change(slider, { target: { value: "2" } });
-    expect(defaultProps.onSpeedChange).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("speed-preset-2"));
+    expect(defaultProps.onSpeedChange).toHaveBeenCalledWith(2);
+  });
+
+  test("calls onSpeedChange when the free-form speed input changes", () => {
+    render(<DurationControls {...defaultProps} />);
+    const speedInput = document.querySelector(
+      'input[type="number"][data-testid="speed-input"]',
+    ) as HTMLInputElement;
+    fireEvent.change(speedInput, { target: { value: "2.5" } });
+    expect(defaultProps.onSpeedChange).toHaveBeenCalledWith(2.5);
   });
 
   test("calls onDurationEnabledChange when checkbox changes", () => {
@@ -67,7 +85,7 @@ describe("DurationControls", () => {
 
   test("calls onDurationValueChange when number input changes", () => {
     render(<DurationControls {...defaultProps} />);
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     fireEvent.change(numberInput, { target: { value: "200" } });
     expect(defaultProps.onDurationValueChange).toHaveBeenCalled();
   });
@@ -93,13 +111,13 @@ describe("DurationControls", () => {
 
   test("number input is disabled when durationEnabled is false", () => {
     render(<DurationControls {...defaultProps} durationEnabled={false} />);
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     expect(numberInput.disabled).toBe(true);
   });
 
   test("number input is enabled when durationEnabled is true", () => {
     render(<DurationControls {...defaultProps} durationEnabled={true} />);
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     expect(numberInput.disabled).toBe(false);
   });
 
@@ -147,27 +165,27 @@ describe("DurationControls", () => {
     expect(card).toBeInTheDocument();
   });
 
-  test("handles speed at minimum value", () => {
+  test("speed input handles minimum value", () => {
     render(<DurationControls {...defaultProps} speed={0.1} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    expect(slider.value).toBe("0.1");
+    const speedInput = document.querySelector('input[type="number"][data-testid="speed-input"]') as HTMLInputElement;
+    expect(speedInput.value).toBe("0.1");
   });
 
-  test("handles speed at maximum value", () => {
-    render(<DurationControls {...defaultProps} speed={3} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    expect(slider.value).toBe("3");
+  test("speed input handles maximum value", () => {
+    render(<DurationControls {...defaultProps} speed={10} />);
+    const speedInput = document.querySelector('input[type="number"][data-testid="speed-input"]') as HTMLInputElement;
+    expect(speedInput.value).toBe("10");
   });
 
   test("handles duration value of 0", () => {
     render(<DurationControls {...defaultProps} durationValue={0} />);
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     expect(numberInput.value).toBe("0");
   });
 
   test("handles large duration value", () => {
     render(<DurationControls {...defaultProps} durationValue={999999} />);
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     expect(numberInput.value).toBe("999999");
   });
 
@@ -193,8 +211,8 @@ describe("DurationControls", () => {
 
   test("handles fractional speed values", () => {
     render(<DurationControls {...defaultProps} speed={1.5} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    expect(slider.value).toBe("1.5");
+    const speedInput = document.querySelector('input[type="number"][data-testid="speed-input"]') as HTMLInputElement;
+    expect(speedInput.value).toBe("1.5");
   });
 
   test("handles negative actualDurationMs gracefully", () => {
@@ -209,13 +227,15 @@ describe("DurationControls", () => {
     expect(screen.getByText(/24h 0m/)).toBeInTheDocument();
   });
 
-  test("rapid slider changes fire multiple callbacks", () => {
+  test("rapid speed preset changes fire multiple callbacks", () => {
     render(<DurationControls {...defaultProps} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    fireEvent.change(slider, { target: { value: "1.5" } });
-    fireEvent.change(slider, { target: { value: "2.0" } });
-    fireEvent.change(slider, { target: { value: "2.5" } });
+    fireEvent.click(screen.getByTestId("speed-preset-0.5"));
+    fireEvent.click(screen.getByTestId("speed-preset-1"));
+    fireEvent.click(screen.getByTestId("speed-preset-2"));
     expect(defaultProps.onSpeedChange).toHaveBeenCalledTimes(3);
+    expect(defaultProps.onSpeedChange).toHaveBeenNthCalledWith(1, 0.5);
+    expect(defaultProps.onSpeedChange).toHaveBeenNthCalledWith(2, 1);
+    expect(defaultProps.onSpeedChange).toHaveBeenNthCalledWith(3, 2);
   });
 
   test("rapid checkbox toggles fire multiple callbacks", () => {
@@ -228,10 +248,10 @@ describe("DurationControls", () => {
 
   test("rapid number input changes fire multiple callbacks", () => {
     render(<DurationControls {...defaultProps} durationEnabled={true} durationValue={200} />);
-    let numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    let numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     fireEvent.change(numberInput, { target: { value: "50" } });
     expect(defaultProps.onDurationValueChange).toHaveBeenCalledTimes(1);
-    numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     fireEvent.change(numberInput, { target: { value: "150" } });
     expect(defaultProps.onDurationValueChange).toHaveBeenCalledTimes(2);
   });
@@ -254,12 +274,12 @@ describe("DurationControls", () => {
     }
   });
 
-  test("handles speed at exact boundary values", () => {
+  test("speed input exposes valid bounds and step", () => {
     render(<DurationControls {...defaultProps} speed={0.1} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    expect(slider.min).toBe("0.1");
-    expect(slider.max).toBe("3");
-    expect(slider.step).toBe("0.1");
+    const speedInput = document.querySelector('input[type="number"][data-testid="speed-input"]') as HTMLInputElement;
+    expect(speedInput.min).toBe("0.1");
+    expect(speedInput.max).toBe("10");
+    expect(speedInput.step).toBe("0.1");
   });
 
   test("renders with actualDurationMs of exactly 1000ms", () => {
@@ -279,20 +299,20 @@ describe("DurationControls", () => {
 
   test("handles speed with many decimal places", () => {
     render(<DurationControls {...defaultProps} speed={1.123456} />);
-    const slider = document.querySelector('input[type="range"]') as HTMLInputElement;
-    expect(slider.value).toBe("1.123456");
+    const speedInput = document.querySelector('input[type="number"][data-testid="speed-input"]') as HTMLInputElement;
+    expect(speedInput.value).toBe("1.123456");
   });
 
   test("handles duration value with many digits", () => {
     render(<DurationControls {...defaultProps} durationValue={123456789} />);
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     expect(numberInput.value).toBe("123456789");
   });
 
   test("renders with checkbox checked and duration inputs enabled", () => {
     render(<DurationControls {...defaultProps} durationEnabled={true} durationValue={50} durationUnit="minutes" />);
     const checkbox = document.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     const select = document.querySelector('select') as HTMLSelectElement;
     expect(checkbox.checked).toBe(true);
     expect(numberInput.disabled).toBe(false);
@@ -304,7 +324,7 @@ describe("DurationControls", () => {
   test("renders with checkbox unchecked and duration inputs disabled", () => {
     render(<DurationControls {...defaultProps} durationEnabled={false} />);
     const checkbox = document.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    const numberInput = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const numberInput = document.querySelector('input[type="number"][data-testid="duration-input"]') as HTMLInputElement;
     const select = document.querySelector('select') as HTMLSelectElement;
     expect(checkbox.checked).toBe(false);
     expect(numberInput.disabled).toBe(true);
