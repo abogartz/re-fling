@@ -1,95 +1,43 @@
-# React + Tailwind + Vite Electrobun Template
+# re-fling
 
-A fast Electrobun desktop app template with React, Tailwind CSS, and Vite for hot module replacement (HMR).
+Replay web requests from a CSV file at your own pace. Load a CSV with `url` and `datetime` columns, tweak the speed and duration, and watch the requests fire with a live RPS chart and request log.
 
-## Getting Started
+## What it does
 
-```bash
-# Install dependencies
-bun install
+- **Load a CSV** — auto-detects `url` and `datetime` columns, or remap them manually if your headers differ.
+- **Filter** — exclude requests whose URL matches regex patterns.
+- **Control pacing** — set a speed multiplier and an optional duration override.
+- **Replay in real time** — fires the requests with timing based on your CSV, and shows progress, a per-second RPS chart, and a log of everything that happened.
 
-# Development without HMR (uses bundled assets)
-bun run dev
-
-# Development with HMR (recommended)
-bun run dev:hmr
-
-# Build for production
-bun run build
-
-# Build for production release
-bun run build:prod
-```
-
-## How HMR Works
-
-When you run `bun run dev:hmr`:
-
-1. **Vite dev server** starts on `http://localhost:5173` with HMR enabled
-2. **Electrobun** starts and detects the running Vite server
-3. The app loads from the Vite dev server instead of bundled assets
-4. Changes to React components update instantly without full page reload
-
-When you run `bun run dev` (without HMR):
-
-1. Electrobun starts and loads from `views://mainview/index.html`
-2. You need to rebuild (`bun run build`) to see changes
-
-## Project Structure
-
-```
-├── src/
-│   ├── bun/
-│   │   └── index.ts        # Main process (Electrobun/Bun)
-│   └── mainview/
-│       ├── App.tsx         # React app component
-│       ├── main.tsx        # React entry point
-│       ├── index.html      # HTML template
-│       └── index.css       # Tailwind CSS
-├── electrobun.config.ts    # Electrobun configuration
-├── vite.config.ts          # Vite configuration
-├── tailwind.config.js      # Tailwind configuration
-└── package.json
-```
-
-## Development Workflow
+## Getting started
 
 ```bash
-# Run all validation (ESLint + unit tests + E2E tests)
-bun run validate
+bun install       # install dependencies
+bun run dev:hmr   # run with hot module reload (recommended)
+bun run start     # build and run without HMR
 ```
 
-This runs:
-1. **ESLint** - Lints TypeScript/React code with strict rules
-2. **Unit tests** - Bun test suite for CSV parser and replay engine
-3. **E2E tests** - Playwright tests for full app behavior
+## Project layout
 
-**Important**: All checks must pass before committing changes. The pi agent requires `bun run validate` to pass after every code modification.
+```
+src/
+├── bun/            # desktop shell (Electrobun main process + logging)
+├── csv/            # CSV parser
+├── features/       # column mapping, CSV loader, duration, filters, logs
+├── mainview/       # the React app (App.tsx, chart, entry point)
+├── replay/         # the replay engine (scheduling, pacing, fetch)
+├── services/       # CSV → log formatter
+├── store/          # global app state (Zustand)
+└── utils/          # scheduling math, filters, timeseries helpers
+```
 
-### Validation Rules
-- ESLint: 0 errors (warnings allowed)
-- Unit tests: All tests must pass
-- E2E tests: All tests must pass
-
-If validation fails, fix the issues before proceeding.
-
-## Testing & Validation
+## Testing
 
 ```bash
-# Run only unit tests
-bun run test
-
-# Run only E2E tests (requires dev server)
-bun run test:e2e
-
-# Run only linting
-bun run lint
+bun run test        # unit tests (CSV parser, engine, utils, UI)
+bun run test:e2e    # Playwright end-to-end tests
+bun run lint        # ESLint
+bun run validate    # lint + unit + e2e, all in one
 ```
 
-## Customizing
-
-- **React components**: Edit files in `src/mainview/`
-- **Tailwind theme**: Edit `tailwind.config.js`
-- **Vite settings**: Edit `vite.config.ts`
-- **Window settings**: Edit `src/bun/index.ts`
-- **App metadata**: Edit `electrobun.config.ts`
+Run `bun run validate` and make sure everything passes before committing.
