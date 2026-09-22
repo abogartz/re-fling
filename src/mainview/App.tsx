@@ -1,7 +1,8 @@
 import React, { useEffect, useCallback } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { getEffectiveDurationMs, calculateActualDuration } from "../utils/duration";
-import { recalcPreviewStats } from "../utils/timeseries";
+import { recalcPreviewStats, type DurationConfig } from "../utils/timeseries";
+import { splitFilterPatterns } from "../utils/filterRows";
 import { addLog } from "../bun/logs";
 import { formatRequestsForLog } from "../services/csv-formatter";
 import { useCsvLoad } from "../features/csv/useCsvLoad";
@@ -51,7 +52,14 @@ function App() {
     }
 
     const state = useAppStore.getState();
-    const result = recalcPreviewStats(csv.parsedData.data, state);
+    const config: DurationConfig = {
+      speed: state.speed,
+      durationEnabled: state.durationEnabled,
+      durationValue: state.durationValue,
+      durationUnit: state.durationUnit,
+      filterPatterns: splitFilterPatterns(state.filterPatterns),
+    };
+    const result = recalcPreviewStats(csv.parsedData.data, config);
     setPreviewStats(result.timeseries, result.totalRequests);
 
     if (csv.parsedData.data.length > 0) {
@@ -88,6 +96,7 @@ function App() {
         durationEnabled: state.durationEnabled,
         durationValue: state.durationValue,
         durationUnit: state.durationUnit,
+        filterPatterns: splitFilterPatterns(state.filterPatterns),
       });
       setPreviewStats(result.timeseries, result.totalRequests);
     },
@@ -120,7 +129,14 @@ function App() {
     useAppStore.getState().setDurationEnabled(checked);
     if (csv.parsedData) {
       const state = useAppStore.getState();
-      const result = recalcPreviewStats(csv.parsedData.data, state);
+      const config: DurationConfig = {
+        speed: state.speed,
+        durationEnabled: state.durationEnabled,
+        durationValue: state.durationValue,
+        durationUnit: state.durationUnit,
+        filterPatterns: splitFilterPatterns(state.filterPatterns),
+      };
+      const result = recalcPreviewStats(csv.parsedData.data, config);
       setPreviewStats(result.timeseries, result.totalRequests);
     }
   };
@@ -139,10 +155,7 @@ function App() {
       duration:
         effectiveDurationMs > 0 ? effectiveDurationMs : 0,
       baseUrl: filt.baseUrl,
-      filterPatterns: filt.filterPatterns
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
+      filterPatterns: splitFilterPatterns(filt.filterPatterns),
     };
     startReplay(
       csv.parsedData.data.map((d) => ({ datetime: d.datetime, url: d.url })),

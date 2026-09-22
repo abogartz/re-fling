@@ -236,7 +236,7 @@ describe("useCsvLoad", () => {
     expect(result.current.error).toBeNull();
   });
 
-  test("calls addLog with formatted JSON data after successful parse", async () => {
+  test("does not log on load (App logs once with the real speed/duration)", async () => {
     const { addLog } = await import("../../bun/logs");
 
     const { result } = renderHook(() => useCsvLoad());
@@ -250,16 +250,7 @@ describe("useCsvLoad", () => {
       await result.current.handleFileLoad();
     });
 
-    expect(addLog).toHaveBeenCalled();
-    const logArg = (addLog as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    // Should start with "requests: " prefix and contain valid JSON
-    expect(logArg.startsWith("requests: ")).toBe(true);
-    const jsonStr = logArg.slice("requests: ".length);
-    const parsed = JSON.parse(jsonStr);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed).toHaveLength(3);
-    expect(parsed[0]).toHaveProperty("url");
-    expect(parsed[0]).toHaveProperty("timing");
+    expect(addLog).not.toHaveBeenCalled();
   });
 
   test("handleFileLoad sets error when file.text() throws", async () => {
@@ -317,33 +308,7 @@ describe("useCsvLoad", () => {
     expect(result.current.columnMapping.datetime).toBe("DateTime");
   });
 
-  test("EXPOSES BUG: addLog uses csv-formatter with speed=1 and duration=0", async () => {
-    const { addLog } = await import("../../bun/logs");
-    const { formatRequestsForLog } = await import("../../services/csv-formatter");
-
-    const { result } = renderHook(() => useCsvLoad());
-    const file = createMockFile(csvText);
-
-    result.current.fileInputRef.current = {
-      files: [file],
-    } as unknown as HTMLInputElement;
-
-    await act(async () => {
-      await result.current.handleFileLoad();
-    });
-
-    // Verify addLog receives output from formatRequestsForLog(data, 1, 0)
-    expect(addLog).toHaveBeenCalled();
-    const logArg = (addLog as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const expectedFormat = formatRequestsForLog(
-      result.current.parsedData!.data,
-      1,
-      0
-    );
-    expect(logArg).toBe(expectedFormat);
-  });
-
-  test("EXPOSES BUG: incomplete column mapping clears parsedData", async () => {
+  test("incomplete column mapping clears parsedData", async () => {
     const { result } = renderHook(() => useCsvLoad());
     const file = createMockFile(csvText);
 

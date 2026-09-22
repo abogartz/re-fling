@@ -1,6 +1,7 @@
 import { CSVRow } from "../csv/parser";
 import { getEffectiveDurationMs } from "./duration";
 import { buildActiveRows } from "./buildActiveRows";
+import { filterRowsByPatterns } from "./filterRows";
 
 export interface TimeseriesResult {
   timestamps: number[];
@@ -17,6 +18,7 @@ export type DurationConfig = {
   durationEnabled: boolean;
   durationValue: number;
   durationUnit: "seconds" | "minutes" | "hours";
+  filterPatterns?: string[];
 };
 
 /**
@@ -71,14 +73,17 @@ export function recalcPreviewStats(
 ): PreviewStats {
   const overrideMs = getEffectiveDurationFromConfig(config);
 
+  // Mirror the engine: drop rows matching any filter pattern before scheduling.
+  const filteredData = filterRowsByPatterns(data, config.filterPatterns ?? []);
+
   // Build active rows exactly like engine does — this is the source of truth.
   // duration 0 → natural speed-scaled window (span / speed).
-  const { activeRows } = buildActiveRows(data, {
+  const { activeRows } = buildActiveRows(filteredData, {
     speed: config.speed,
     duration: overrideMs > 0 ? overrideMs : 0,
   });
 
-  const ts = calculateExpectedTimeseries(data, overrideMs > 0 ? overrideMs : 0, config.speed);
+  const ts = calculateExpectedTimeseries(filteredData, overrideMs > 0 ? overrideMs : 0, config.speed);
 
   return { timeseries: ts, totalRequests: activeRows.length };
 }

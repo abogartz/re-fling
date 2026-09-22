@@ -164,6 +164,23 @@ describe("recalcPreviewStats", () => {
     expect(result.totalRequests).toBe(3);
   });
 
+  test("filterPatterns drops matching rows from preview stats (matches engine)", () => {
+    const data = [
+      { datetime: new Date("2024-01-01T10:00:00Z"), url: "/api/posts/1" },
+      { datetime: new Date("2024-01-01T10:00:01Z"), url: "/api/posts/2" },
+      { datetime: new Date("2024-01-01T10:00:02Z"), url: "/api/users" },
+    ];
+    const config = {
+      speed: 1,
+      durationEnabled: false,
+      durationValue: 0,
+      durationUnit: "seconds" as const,
+      filterPatterns: ["/api/posts"],
+    };
+    const result = recalcPreviewStats(data, config);
+    expect(result.totalRequests).toBe(1); // 3 rows in, 2 filtered
+  });
+
   test("speed changes total request count (tighter pacing fills more cycles)", () => {
     // 4 rows 1s apart (3s span). Override 3s.
     // speed 1 → natural window = 3s → 4 rows play once.

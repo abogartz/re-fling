@@ -1,8 +1,6 @@
 import React, { useCallback, useRef } from "react";
 import { parseCSV } from "../../csv/parser";
 import { useAppStore } from "../../store/useAppStore";
-import { addLog } from "../../bun/logs";
-import { formatRequestsForLog } from "../../services/csv-formatter";
 
 export function useCsvLoad() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -57,9 +55,6 @@ export function useCsvLoad() {
           );
         }
         setParsedData(mappedResult);
-
-        const logMessage = formatRequestsForLog(mappedResult.data, 1, 0);
-        addLog(logMessage);
       } else {
         setParsedData(null);
       }

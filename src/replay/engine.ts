@@ -1,6 +1,7 @@
 import { CSVRow } from "../csv/parser";
 import { calculateActualDuration } from "../utils/duration";
 import { buildActiveRows } from "../utils/buildActiveRows";
+import { filterRowsByPatterns } from "../utils/filterRows";
 
 // --- Types ---
 
@@ -43,7 +44,7 @@ export class ReplayEngine {
   private onProgress?: ProgressCallback;
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private startTime: number = 0;
-  private pausedAt: number = 0;
+  private elapsedAtPause: number = 0;
   private filteredRows: CSVRow[] = [];
   private currentRow: number = 0;
   private actualDurationMs: number = 0; // Time span of the CSV data in ms
@@ -82,7 +83,7 @@ export class ReplayEngine {
     };
 
     this.config = effectiveConfig;
-    const rawFiltered = this.filterRows(data);
+    const rawFiltered = filterRowsByPatterns(data, effectiveConfig.filterPatterns);
     // Resolve base URL on the working rows so tick() fetches absolute URLs
     this.filteredRows = rawFiltered.map(row => ({
       ...row,
@@ -126,22 +127,6 @@ export class ReplayEngine {
 
 
 
-
-  private filterRows(rows: CSVRow[]): CSVRow[] {
-    if (!this.config || this.config.filterPatterns.length === 0) {
-      return rows;
-    }
-
-    return rows.filter((row) =>
-      !(this.config?.filterPatterns ?? []).some((pattern) => {
-        try {
-          return new RegExp(pattern, "i").test(row.url);
-        } catch {
-          return false;
-        }
-      })
-    );
-  }
 
   private resolveBaseUrl(row: CSVRow): string {
     if (!this.config || !this.config.baseUrl) {
@@ -215,7 +200,7 @@ export class ReplayEngine {
     }
 
     this.state = { ...this.state, status: "paused" };
-    this.pausedAt = Date.now();
+    this.elapsedAtPause = Date.now() - this.startTime;
     this.clearTimer();
     this.emit();
   }
@@ -226,7 +211,7 @@ export class ReplayEngine {
     }
 
     this.state = { ...this.state, status: "running" };
-    this.startTime = Date.now() - this.pausedAt;
+    this.startTime = Date.now() - this.elapsedAtPause;
     this.tick();
   }
 
