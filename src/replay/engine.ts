@@ -31,6 +31,8 @@ export interface ReplayState {
   elapsed: number;
   timeseries: TimeseriesData;
   actualDurationMs: number;
+  scheduledAt: number[]; // Planned fire offset (ms from start) for each active row
+  actuallyFiredAt: (number | null)[]; // Realized elapsed (ms from start) per row, null until fired
   error?: string;
 }
 
@@ -67,6 +69,8 @@ export class ReplayEngine {
       elapsed: 0,
       timeseries: { timestamps: [], rpsValues: [] },
       actualDurationMs: 0,
+      scheduledAt: [],
+      actuallyFiredAt: [],
     };
   }
 
@@ -84,7 +88,7 @@ export class ReplayEngine {
 
     this.config = effectiveConfig;
     const rawFiltered = filterRowsByPatterns(data, effectiveConfig.filterPatterns);
-    // Resolve base URL on the working rows so tick() fetches absolute URLs
+    // Resolve base URL on the working rows so fireRow() fetches absolute URLs
     this.filteredRows = rawFiltered.map(row => ({
       ...row,
       url: this.resolveBaseUrl(row),
@@ -99,6 +103,20 @@ export class ReplayEngine {
 
     this.currentRow = 0;
 
+    // Absolute fire schedule: offset (ms) of each row from the first active row.
+    // Shifted row datetimes already encode the planned wall-clock offset, so the
+    // scheduler can target each row at its absolute time instead of chaining sleeps.
+    const scheduledAt =
+      activeRows.length === 0
+        ? []
+        : (() => {
+            const firstFire = new Date(activeRows[0].datetime).getTime();
+            return activeRows.map(
+              (row) => new Date(row.datetime).getTime() - firstFire,
+            );
+          })();
+    const actuallyFiredAt: (number | null)[] = new Array(activeRows.length).fill(null);
+
     this.state = {
       ...this.getInitialState(),
       config: effectiveConfig,
@@ -108,6 +126,8 @@ export class ReplayEngine {
       totalRequests: activeRows.length,
       timeseries: this.buildTimeseriesForRows(activeRows, effectiveConfig),
       actualDurationMs: this.actualDurationMs,
+      scheduledAt,
+      actuallyFiredAt,
     };
     this.emit();
   }
@@ -182,7 +202,7 @@ export class ReplayEngine {
 
     this.state = { ...this.state, status: "running" };
     this.startTime = Date.now();
-    this.tick();
+    this.scheduleNext();
   }
 
   cancel(): void {
@@ -212,28 +232,54 @@ export class ReplayEngine {
 
     this.state = { ...this.state, status: "running" };
     this.startTime = Date.now() - this.elapsedAtPause;
-    this.tick();
+    this.scheduleNext();
   }
 
-  private tick(): void {
+  /**
+   * Drift-free scheduling: each row is targeted at its absolute offset from
+   * startTime (precomputed in setData). Deviation from that target is recorded
+   * as jitter in actuallyFiredAt. A row that is already due (negative delay,
+   * e.g. catch-up after a pause) is clamped to 0 — fired immediately, never
+   * dropped — and the schedule resumes from the next row.
+   */
+  private scheduleNext(): void {
     if (this.state.status !== "running" || !this.config) {
       return;
     }
 
-    const elapsed = Date.now() - this.startTime;
-    const targetDuration = this.config.duration ?? this.actualDurationMs;
-    const activeRows = this.state.activeRows;
-
-    // Check if we've walked all rows (always complete all rows)
-    if (this.currentRow >= activeRows.length) {
+    const idx = this.currentRow;
+    if (idx >= this.state.activeRows.length) {
+      const elapsed = Date.now() - this.startTime;
       this.state = { ...this.state, status: "completed", progress: 1, elapsed };
       this.emit();
       return;
     }
 
-    const row = activeRows[this.currentRow];
+    const elapsed = Date.now() - this.startTime;
+    const fireAt = this.state.scheduledAt[idx] ?? 0;
+    const delay = Math.max(0, fireAt - elapsed);
+    this.timerId = setTimeout(() => this.fireRow(idx), delay);
+  }
 
-    // Perform the actual network call.
+  private fireRow(idx: number): void {
+    if (this.state.status !== "running") {
+      return; // paused or cancelled while the timer was pending
+    }
+    this.timerId = null;
+
+    const row = this.state.activeRows[idx];
+    if (!row) {
+      this.currentRow = idx + 1;
+      this.scheduleNext();
+      return;
+    }
+
+    const elapsed = Date.now() - this.startTime;
+    const actuallyFiredAt = this.state.actuallyFiredAt.slice();
+    actuallyFiredAt[idx] = elapsed;
+
+    // Perform the actual network call (fire-and-forget; response latency must
+    // never delay the schedule).
     fetch(row.url)
       .then(() => {})
       .catch((_err) => {
@@ -241,28 +287,22 @@ export class ReplayEngine {
         this.emit();
       });
 
-    this.currentRow++;
-    const completed = this.currentRow;
+    this.currentRow = idx + 1;
+    const targetDuration = this.config?.duration ?? this.actualDurationMs;
     const progress = targetDuration > 0 ? Math.min(1, elapsed / targetDuration) : 1;
 
     this.state = {
       ...this.state,
       progress,
-      completedRequests: completed,
+      completedRequests: this.currentRow,
       elapsed,
       currentUrl: row?.url,
       timeseries: this.state.timeseries,
+      actuallyFiredAt,
     };
     this.emit();
 
-    // Delay until the next row (pre-calculated from the original gaps / speed).
-    const nextDelay = this.state.rowDelays[this.currentRow - 1] ?? 0;
-    if (this.currentRow < activeRows.length) {
-      this.timerId = setTimeout(() => this.tick(), nextDelay);
-    } else {
-      // Last row fired — complete on next tick
-      this.timerId = setTimeout(() => this.tick(), 1);
-    }
+    this.scheduleNext();
   }
 
   private clearTimer(): void {

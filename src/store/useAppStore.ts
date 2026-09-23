@@ -123,6 +123,8 @@ const initialState: AppState = {
   elapsed: 0,
   timeseries: { timestamps: [], rpsValues: [] },
   actualDurationMs: 0,
+  scheduledAt: [],
+  actuallyFiredAt: [],
 };
 
 export const useAppStore = create<AppState & AppActions>((set, get) => ({
@@ -189,6 +191,8 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       elapsed: state.elapsed ?? prev.elapsed,
       timeseries: state.timeseries ?? prev.timeseries,
       actualDurationMs: state.actualDurationMs ?? prev.actualDurationMs,
+      scheduledAt: state.scheduledAt ?? prev.scheduledAt,
+      actuallyFiredAt: state.actuallyFiredAt ?? prev.actuallyFiredAt,
       currentUrl: state.currentUrl ?? prev.currentUrl,
       error: state.error ?? prev.error,
     }));

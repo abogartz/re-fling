@@ -5,16 +5,17 @@
  *   C1 Ordering — rows fire in the order they appear in the (source-ordered)
  *      input; response arrival order never changes fire order.
  *   C2 Gaps    — at speed s, the delay between fire i and i+1 is
- *      (dt(i+1) - dt(i)) / s. Provisional bound: ±20ms at speed 1x. This file
- *      asserts a wider ±40ms provisionally; Phase 1 must tighten to ±20ms.
+ *      (dt(i+1) - dt(i)) / s. Bound: ±20ms at speed 1x.
  *   C3 Boundary— rows at/inside the replay window fire; cycles that have
  *      started play to completion (buildActiveRows semantics).
  *   C4 No implicit transforms — no retries, no auto-drop, no scheduler
  *      reordering; a transport failure is recorded, never silently retried.
  *   C5 Non-blocking — response latency must never delay subsequent fires.
  *
- * The current engine (chained setTimeout) is the baseline. Phase 1 replaces
- * it with absolute-offset scheduling while these tests stay green.
+ * Phase 1 adds absolute-offset scheduling: ReplayState exposes scheduledAt
+ * (planned fire offset per row) and actuallyFiredAt (realized offset), so
+ * per-row jitter and the long-run drift tests below are asserted against the
+ * schedule itself, not just wall-clock gaps.
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
@@ -170,7 +171,7 @@ describe("Fidelity contract — C2 gaps", () => {
     const gaps = fireGaps();
     expect(gaps.length).toBe(data.length - 1);
     for (const gap of gaps) {
-      expect(Math.abs(gap - gapMs)).toBeLessThanOrEqual(40);
+      expect(Math.abs(gap - gapMs)).toBeLessThanOrEqual(20);
     }
   });
 
@@ -187,7 +188,7 @@ describe("Fidelity contract — C2 gaps", () => {
     const gaps = fireGaps();
     expect(gaps.length).toBe(data.length - 1);
     for (const gap of gaps) {
-      expect(Math.abs(gap - 50)).toBeLessThanOrEqual(40);
+      expect(Math.abs(gap - 50)).toBeLessThanOrEqual(20);
     }
   });
 
@@ -204,7 +205,7 @@ describe("Fidelity contract — C2 gaps", () => {
 
     const gaps = fireGaps();
     for (const gap of gaps) {
-      expect(Math.abs(gap - 30)).toBeLessThanOrEqual(40);
+      expect(Math.abs(gap - 30)).toBeLessThanOrEqual(20);
     }
   });
 });
@@ -268,5 +269,100 @@ describe("Fidelity contract — C4 no implicit transforms", () => {
 
     expect(fires.length).toBe(1); // exactly one attempt
     expect(engine.getState().errors).toBe(1);
+  });
+});
+
+describe("Phase 1 — drift-free scheduling", () => {
+  beforeEach(() => installFetchStub());
+
+  afterEach(() => {
+    if (origFetch) {
+      globalThis.fetch = origFetch;
+      origFetch = null;
+    }
+  });
+
+  test("no compounding drift over 150 rows (50ms gaps at speed 1)", async () => {
+    const data = rowsWithGaps(50, 150);
+    const engine = new ReplayEngine();
+    engine.setData(data, configFor(1, 0));
+    engine.setProgressCallback(() => {});
+    engine.start();
+
+    await waitForStatus(engine, "completed", 15000);
+    engine.cancel();
+
+    const state = engine.getState();
+    expect(state.completedRequests).toBe(150);
+    expect(fires.length).toBe(150);
+    expect(state.scheduledAt.length).toBe(150);
+
+    // Every fire lands within ±20ms of its precomputed absolute offset; error
+    // must not accumulate at row 150 (the chained-setTimeout baseline fails this).
+    for (let i = 0; i < 150; i++) {
+      const fired = state.actuallyFiredAt[i];
+      expect(fired).not.toBeNull();
+      expect(Math.abs((fired as number) - state.scheduledAt[i])).toBeLessThanOrEqual(20);
+    }
+
+    // Total realized span matches the schedule (149 gaps * 50ms) within 40ms.
+    const first = state.actuallyFiredAt[0] as number;
+    const last = state.actuallyFiredAt[149] as number;
+    expect(Math.abs(last - first - 149 * 50)).toBeLessThanOrEqual(40);
+  }, 20000);
+
+  test("pause/resume preserves the absolute schedule; nothing fires while paused", async () => {
+    const data = rowsWithGaps(500, 2);
+    const engine = new ReplayEngine();
+    engine.setData(data, configFor(1, 0));
+    engine.setProgressCallback(() => {});
+    engine.start();
+
+    // Let row 0 fire, then pause before row 1 is due at 500ms.
+    await new Promise((r) => setTimeout(r, 100));
+    engine.pause();
+    expect(engine.getState().status).toBe("paused");
+
+    // Wall clock advances past row 1's nominal due time, but elapsed is frozen.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(fires.length).toBe(1);
+
+    engine.resume();
+    expect(engine.getState().status).toBe("running");
+    await waitForStatus(engine, "completed");
+    engine.cancel();
+
+    const state = engine.getState();
+    expect(fires.length).toBe(2);
+    expect(fires.map((f) => f.url)).toEqual(data.map((d) => d.url));
+
+    // Row 1 still lands at ~its scheduled offset (fires ~400ms after resume,
+    // not immediately): the absolute schedule is preserved across the pause.
+    const jitter = (state.actuallyFiredAt[1] as number) - state.scheduledAt[1];
+    expect(Math.abs(jitter)).toBeLessThanOrEqual(150);
+  });
+
+  test("catch-up after a long pause fires all due rows in order, none dropped", async () => {
+    const data = rowsWithGaps(200, 3);
+    const engine = new ReplayEngine();
+    engine.setData(data, configFor(1, 0));
+    engine.setProgressCallback(() => {});
+    engine.start();
+
+    await new Promise((r) => setTimeout(r, 100)); // row 0 fired
+    engine.pause();
+    await new Promise((r) => setTimeout(r, 500)); // rows 1, 2 due in wall clock
+
+    engine.resume();
+    await waitForStatus(engine, "completed");
+    engine.cancel();
+
+    expect(fires.map((f) => f.url)).toEqual(data.map((d) => d.url));
+    expect(fires.length).toBe(3); // nothing dropped
+
+    const state = engine.getState();
+    for (const fired of state.actuallyFiredAt) {
+      expect(fired).not.toBeNull();
+    }
   });
 });

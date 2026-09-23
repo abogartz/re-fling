@@ -100,7 +100,15 @@ describe("ReplayEngine — Network Behavior (PRD #1)", () => {
     engine.setProgressCallback(() => {});
     engine.start();
 
-    await new Promise((r) => setTimeout(r, 250));
+    // Connection refusal on a dead localhost port surfaces asynchronously;
+    // poll rather than guessing a fixed latency (machine-load dependent).
+    const t0 = Date.now();
+    while (Date.now() - t0 < 2000) {
+      if (engine.getState().errors >= 1) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     const state = engine.getState();
     console.warn(`[GREEN] errors=${state.errors} | status=${state.status}`);
