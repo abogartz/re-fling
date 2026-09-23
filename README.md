@@ -1,13 +1,13 @@
 # re-fling
 
-Replay web requests from a CSV file at your own pace. Load a CSV with `url` and `datetime` columns, tweak the speed and duration, and watch the requests fire with a live RPS chart and request log.
+Replay web requests from a CSV file at your own pace — re-creating the recorded traffic in the same order and with the same relative gaps. Load a CSV with `url` and `datetime` columns, tweak the speed and duration, and watch the requests fire with an expected-RPS chart and request log.
 
 ## What it does
 
 - **Load a CSV** — auto-detects `url` and `datetime` columns, or remap them manually if your headers differ.
 - **Filter** — exclude requests whose URL matches regex patterns.
 - **Control pacing** — set a speed multiplier and an optional duration override.
-- **Replay in real time** — fires the requests with timing based on your CSV, and shows progress, a per-second RPS chart, and a log of everything that happened.
+- **Replay in real time** — fires requests in the recorded order with the same relative gaps, and shows progress, an expected-RPS chart, and a log of everything that happened.
 
 ## Getting started
 
